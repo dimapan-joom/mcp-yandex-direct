@@ -16,6 +16,8 @@ export interface ReportOptions {
   processingMode?: "auto" | "online" | "offline";
   returnMoneyInMicros?: boolean;
   maxPolls?: number;
+  /** Client-Login override for this report; undefined → configured login. */
+  login?: string | null;
 }
 
 /** API error codes that are transient and worth retrying: 52 = try again later, 506 = request rate exceeded. */
@@ -104,15 +106,24 @@ export class YandexDirectClient {
    * token themselves (one per loop iteration) so the SAME value goes into the request
    * and into tokens.invalidate() on an auth failure — fetching twice could straddle a
    * cache refresh and invalidate the wrong token. Client-Login stays orthogonal to
-   * auth: one token serves all logins.
+   * auth: one agency token serves all logins.
+   *
+   * `login` semantics: undefined → the configured YANDEX_DIRECT_LOGIN (if any);
+   * a string → that client's account; null → NO Client-Login header at all
+   * (required by agencyclients.get, which addresses the agency itself).
    */
-  private buildHeaders(token: string, extra?: Record<string, string>): Record<string, string> {
+  private buildHeaders(
+    token: string,
+    extra?: Record<string, string>,
+    login?: string | null,
+  ): Record<string, string> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       "Accept-Language": this.config.lang,
       "Content-Type": "application/json; charset=utf-8",
     };
-    if (this.config.login) headers["Client-Login"] = this.config.login;
+    const effectiveLogin = login === undefined ? this.config.login : login;
+    if (effectiveLogin) headers["Client-Login"] = effectiveLogin;
     return { ...headers, ...extra };
   }
 
@@ -127,11 +138,15 @@ export class YandexDirectClient {
     return status === 401 || errorCode === 53;
   }
 
-  /** Calls a JSON service (campaigns, ads, keywords, ...) and returns its `result` object. */
+  /**
+   * Calls a JSON service (campaigns, ads, keywords, ...) and returns its `result` object.
+   * `login` overrides the configured Client-Login for this call (see buildHeaders).
+   */
   async call<T = unknown>(
     service: string,
     method: string,
     params: Record<string, unknown>,
+    login?: string | null,
   ): Promise<T> {
     // SSRF guard (matches the sibling MCP servers): resolve `service` against the API
     // base and reject anything that lands on a FOREIGN origin — an absolute URL
@@ -161,7 +176,7 @@ export class YandexDirectClient {
           target.toString(),
           {
             method: "POST",
-            headers: this.buildHeaders(token),
+            headers: this.buildHeaders(token, undefined, login),
             body: JSON.stringify({ method, params }),
           },
           service,
@@ -345,6 +360,7 @@ export class YandexDirectClient {
     params: Record<string, unknown>,
     maxPages = 100,
     caps: AutoPaginateCaps = {},
+    login?: string | null,
   ): Promise<T> {
     const basePage = (params.Page as Record<string, unknown> | undefined) ?? {};
     // autoPaginate ("fetch all") ALWAYS pages at the API max, independent of the
@@ -362,7 +378,7 @@ export class YandexDirectClient {
 
     for (let page = 0; page < maxPages; page++) {
       const pageParams = { ...params, Page: { Limit: limit, Offset: offset } };
-      const result = await this.call<Record<string, unknown>>(service, "get", pageParams);
+      const result = await this.call<Record<string, unknown>>(service, "get", pageParams, login);
 
       if (!merged) {
         merged = result;
@@ -435,7 +451,7 @@ export class YandexDirectClient {
         url,
         {
           method: "POST",
-          headers: this.buildHeaders(token, extraHeaders),
+          headers: this.buildHeaders(token, extraHeaders, opts.login),
           body: JSON.stringify({ params }),
         },
         "reports",

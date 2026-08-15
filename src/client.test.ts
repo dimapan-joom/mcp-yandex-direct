@@ -780,6 +780,70 @@ test("callV4() re-mints once on v4 error_code 53", async () => {
   }
 });
 
+// --- per-call Client-Login override ------------------------------------------
+
+test("call() login override wins over the configured login", async () => {
+  const mock = mockFetch(() => new Response(JSON.stringify({ result: {} }), { status: 200 }));
+  try {
+    const client = new YandexDirectClient({ token: "T", login: "default-login", ...BASE_CONFIG });
+    await client.call("campaigns", "get", {}, "client-a");
+    await client.call("campaigns", "get", {});
+    const h0 = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
+    const h1 = (mock.calls[1].init.headers ?? {}) as Record<string, string>;
+    assert.equal(h0["Client-Login"], "client-a");
+    assert.equal(h1["Client-Login"], "default-login");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("call() login:null strips the Client-Login header entirely (agencyclients)", async () => {
+  const mock = mockFetch(() => new Response(JSON.stringify({ result: {} }), { status: 200 }));
+  try {
+    const client = new YandexDirectClient({ token: "T", login: "default-login", ...BASE_CONFIG });
+    await client.call("agencyclients", "get", {}, null);
+    const headers = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
+    assert.equal(headers["Client-Login"], undefined);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("getAll() forwards the login override to every page", async () => {
+  let page = 0;
+  const mock = mockFetch(() => {
+    page++;
+    const body =
+      page === 1
+        ? { result: { Campaigns: [{ Id: 1 }], LimitedBy: 1 } }
+        : { result: { Campaigns: [{ Id: 2 }] } };
+    return new Response(JSON.stringify(body), { status: 200 });
+  });
+  try {
+    const client = new YandexDirectClient({ token: "T", ...BASE_CONFIG });
+    await client.getAll("campaigns", {}, undefined, undefined, "client-b");
+    assert.equal(mock.calls.length, 2);
+    for (const call of mock.calls) {
+      const headers = (call.init.headers ?? {}) as Record<string, string>;
+      assert.equal(headers["Client-Login"], "client-b");
+    }
+  } finally {
+    mock.restore();
+  }
+});
+
+test("report() forwards opts.login", async () => {
+  const mock = mockFetch(() => new Response("Date\tCost", { status: 200 }));
+  try {
+    const client = new YandexDirectClient({ token: "T", ...BASE_CONFIG });
+    await client.report({ ReportName: "r" }, { login: "client-c" });
+    const headers = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
+    assert.equal(headers["Client-Login"], "client-c");
+  } finally {
+    mock.restore();
+  }
+});
+
 test("report() re-mints once on 401 and rebuilds headers per poll", async () => {
   let calls = 0;
   const mock = mockFetch((_url, init) => {

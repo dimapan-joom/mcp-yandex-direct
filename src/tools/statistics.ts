@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { fail, isoDate, ok, READ_ONLY } from "./util.js";
+import { fail, isoDate, loginParam, ok, READ_ONLY } from "./util.js";
 import { aggregateReport, countDataRows, MAX_TOP_N, truncateTsv } from "./statistics.aggregate.js";
 
 export const REPORT_TYPES = [
@@ -97,6 +97,7 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
           .boolean()
           .optional()
           .describe("Только строки с clicks>0 и 0 конверсий (нужно Conversions в fieldNames)."),
+        login: loginParam(),
       },
     },
     async ({
@@ -114,6 +115,7 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
       queryContains,
       zeroClicksOnly,
       zeroConversionsOnly,
+      login,
     }) => {
       try {
         const type = reportType ?? "CAMPAIGN_PERFORMANCE_REPORT";
@@ -164,7 +166,7 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
           IncludeDiscount: "NO",
         };
 
-        const tsv = await client.report(params);
+        const tsv = await client.report(params, { login });
         // L2: SEARCH_QUERY is high-cardinality → return a computed summary (totals over
         // 100% of rows + top-N + tail), not raw rows. Other types stay raw (bounded by
         // entity count). Handled first: the summary carries its own explicit empty-slice

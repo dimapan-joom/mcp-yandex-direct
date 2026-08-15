@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { buildPage, compact, fail, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE } from "./util.js";
+import { buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE } from "./util.js";
 
 export function registerAssetTools(server: McpServer, client: YandexDirectClient): void {
   server.registerTool(
@@ -15,9 +15,10 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
         ids: z.array(z.number().int()).min(1).describe("Id наборов быстрых ссылок (обязательны по требованию API)."),
         limit: z.number().int().min(1).max(MAX_TOOL_LIMIT).optional().describe("Максимум объектов на страницу."),
         offset: z.number().int().min(0).optional().describe("Смещение постраничной выдачи."),
+        login: loginParam(),
       },
     },
-    async ({ ids, limit, offset }) => {
+    async ({ ids, limit, offset, login }) => {
       try {
         const params: Record<string, unknown> = {
           SelectionCriteria: { Ids: ids },
@@ -26,7 +27,7 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
         };
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
-        const result = await client.call("sitelinks", "get", params);
+        const result = await client.call("sitelinks", "get", params, login);
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -53,16 +54,17 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
           .min(1)
           .max(8)
           .describe("От 1 до 8 быстрых ссылок."),
+        login: loginParam(),
       },
     },
-    async ({ sitelinks }) => {
+    async ({ sitelinks, login }) => {
       try {
         const set = {
           Sitelinks: sitelinks.map((s) =>
             compact({ Title: s.title, Href: s.href, Description: s.description }),
           ),
         };
-        const result = await client.call("sitelinks", "add", { SitelinksSets: [set] });
+        const result = await client.call("sitelinks", "add", { SitelinksSets: [set] }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -78,11 +80,12 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
       description: "Удаляет наборы быстрых ссылок по id (удалить можно только наборы, не привязанные ни к одному объявлению).",
       inputSchema: {
         ids: z.array(z.number().int()).min(1).describe("Id наборов, которые нужно удалить."),
+        login: loginParam(),
       },
     },
-    async ({ ids }) => {
+    async ({ ids, login }) => {
       try {
-        const result = await client.call("sitelinks", "delete", { SelectionCriteria: { Ids: ids } });
+        const result = await client.call("sitelinks", "delete", { SelectionCriteria: { Ids: ids } }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -101,9 +104,10 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
         ids: z.array(z.number().int()).optional().describe("Фильтр по id уточнений."),
         limit: z.number().int().min(1).max(MAX_TOOL_LIMIT).optional().describe("Максимум объектов на страницу."),
         offset: z.number().int().min(0).optional().describe("Смещение постраничной выдачи."),
+        login: loginParam(),
       },
     },
-    async ({ ids, limit, offset }) => {
+    async ({ ids, limit, offset, login }) => {
       try {
         const params: Record<string, unknown> = {
           SelectionCriteria: compact({ Ids: ids?.length ? ids : undefined, Types: ["CALLOUT"] }),
@@ -112,7 +116,7 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
         };
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
-        const result = await client.call("adextensions", "get", params);
+        const result = await client.call("adextensions", "get", params, login);
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -132,12 +136,13 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
           .array(z.string().min(1).max(25))
           .min(1)
           .describe("Тексты уточнений, до 25 символов каждый."),
+        login: loginParam(),
       },
     },
-    async ({ texts }) => {
+    async ({ texts, login }) => {
       try {
         const adExtensions = texts.map((text) => ({ Callout: { CalloutText: text } }));
-        const result = await client.call("adextensions", "add", { AdExtensions: adExtensions });
+        const result = await client.call("adextensions", "add", { AdExtensions: adExtensions }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -153,13 +158,14 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
       description: "Удаляет уточнения по id (adextensions/delete).",
       inputSchema: {
         ids: z.array(z.number().int()).min(1).describe("Id уточнений, которые нужно удалить."),
+        login: loginParam(),
       },
     },
-    async ({ ids }) => {
+    async ({ ids, login }) => {
       try {
         const result = await client.call("adextensions", "delete", {
           SelectionCriteria: { Ids: ids },
-        });
+        }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -177,9 +183,10 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
         ids: z.array(z.number().int()).min(1).describe("Id визиток (обязательны по требованию API)."),
         limit: z.number().int().min(1).max(MAX_TOOL_LIMIT).optional().describe("Максимум объектов на страницу."),
         offset: z.number().int().min(0).optional().describe("Смещение постраничной выдачи."),
+        login: loginParam(),
       },
     },
-    async ({ ids, limit, offset }) => {
+    async ({ ids, limit, offset, login }) => {
       try {
         const params: Record<string, unknown> = {
           SelectionCriteria: { Ids: ids },
@@ -205,7 +212,7 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
         };
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
-        const result = await client.call("vcards", "get", params);
+        const result = await client.call("vcards", "get", params, login);
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -245,6 +252,7 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
         contactEmail: z.string().optional(),
         extraMessage: z.string().optional().describe("Дополнительная информация на визитке."),
         ogrn: z.string().optional().describe("ОГРН."),
+        login: loginParam(),
       },
     },
     async (a) => {
@@ -270,7 +278,7 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
           ExtraMessage: a.extraMessage,
           OGRN: a.ogrn,
         });
-        const result = await client.call("vcards", "add", { VCards: [vcard] });
+        const result = await client.call("vcards", "add", { VCards: [vcard] }, a.login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -286,11 +294,12 @@ export function registerAssetTools(server: McpServer, client: YandexDirectClient
       description: "Удаляет визитки по id (vcards/delete).",
       inputSchema: {
         ids: z.array(z.number().int()).min(1).describe("Id визиток, которые нужно удалить."),
+        login: loginParam(),
       },
     },
-    async ({ ids }) => {
+    async ({ ids, login }) => {
       try {
-        const result = await client.call("vcards", "delete", { SelectionCriteria: { Ids: ids } });
+        const result = await client.call("vcards", "delete", { SelectionCriteria: { Ids: ids } }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);

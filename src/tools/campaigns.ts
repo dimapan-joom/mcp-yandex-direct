@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { buildPage, compact, fail, isoDate, MAX_TOOL_LIMIT, normalizeMoney, ok, okOrPartial, READ_ONLY, toMicros, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
+import { buildPage, compact, fail, isoDate, loginParam, MAX_TOOL_LIMIT, normalizeMoney, ok, okOrPartial, READ_ONLY, toMicros, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
 
 // Types accepted by campaigns.get SelectionCriteria.Types. UNIFIED_CAMPAIGN is the
 // "Единая перформанс-кампания" (ЕПК) — the type new performance campaigns are created as.
@@ -66,9 +66,10 @@ export function registerCampaignTools(server: McpServer, client: YandexDirectCli
           .boolean()
           .optional()
           .describe("Забрать все страницы, идя по LimitedBy (limit тогда не ограничивает общий объём)."),
+        login: loginParam(),
       },
     },
-    async ({ ids, types, states, statuses, fieldNames, limit, offset, autoPaginate }) => {
+    async ({ ids, types, states, statuses, fieldNames, limit, offset, autoPaginate, login }) => {
       try {
         const selection = compact({
           Ids: ids?.length ? ids : undefined,
@@ -83,8 +84,8 @@ export function registerCampaignTools(server: McpServer, client: YandexDirectCli
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
         const result = autoPaginate
-          ? await client.getAll("campaigns", params)
-          : await client.call("campaigns", "get", params);
+          ? await client.getAll("campaigns", params, undefined, undefined, login)
+          : await client.call("campaigns", "get", params, login);
         return ok(normalizeMoney(result));
       } catch (e) {
         return fail(e);
@@ -118,9 +119,10 @@ export function registerCampaignTools(server: McpServer, client: YandexDirectCli
           .record(z.any())
           .optional()
           .describe("Полный объект BiddingStrategy {Search, Network}. Заменяет значение по умолчанию."),
+        login: loginParam(),
       },
     },
-    async ({ name, startDate, endDate, dailyBudgetAmount, dailyBudgetMode, biddingStrategy }) => {
+    async ({ name, startDate, endDate, dailyBudgetAmount, dailyBudgetMode, biddingStrategy, login }) => {
       try {
         if (biddingStrategy && (!biddingStrategy.Search || !biddingStrategy.Network)) {
           return fail("biddingStrategy должен содержать оба объекта стратегии: Search и Network.");
@@ -136,7 +138,7 @@ export function registerCampaignTools(server: McpServer, client: YandexDirectCli
             BiddingStrategy: biddingStrategy ?? DEFAULT_BIDDING_STRATEGY,
           },
         });
-        const result = await client.call("campaigns", "add", { Campaigns: [campaign] });
+        const result = await client.call("campaigns", "add", { Campaigns: [campaign] }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -154,13 +156,12 @@ export function registerCampaignTools(server: McpServer, client: YandexDirectCli
       inputSchema: {
         action: z.enum(["suspend", "resume", "archive", "unarchive", "delete"]),
         ids: z.array(z.number().int()).min(1).describe("Id кампаний, к которым применить действие."),
+        login: loginParam(),
       },
     },
-    async ({ action, ids }) => {
+    async ({ action, ids, login }) => {
       try {
-        const result = await client.call("campaigns", action, {
-          SelectionCriteria: { Ids: ids },
-        });
+        const result = await client.call("campaigns", action, { SelectionCriteria: { Ids: ids } }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -197,9 +198,10 @@ export function registerCampaignTools(server: McpServer, client: YandexDirectCli
           .array(z.string())
           .optional()
           .describe("Заменяет минус-фразы кампании; пустой массив очищает их."),
+        login: loginParam(),
       },
     },
-    async ({ id, name, endDate, dailyBudgetAmount, dailyBudgetMode, negativeKeywords }) => {
+    async ({ id, name, endDate, dailyBudgetAmount, dailyBudgetMode, negativeKeywords, login }) => {
       try {
         let budgetMode = dailyBudgetMode;
         if (dailyBudgetAmount && !budgetMode) {
@@ -210,6 +212,7 @@ export function registerCampaignTools(server: McpServer, client: YandexDirectCli
             "campaigns",
             "get",
             { SelectionCriteria: { Ids: [id] }, FieldNames: ["DailyBudget"] },
+            login,
           );
           const mode = current.Campaigns?.[0]?.DailyBudget?.Mode;
           budgetMode = mode === "DISTRIBUTED" ? "DISTRIBUTED" : "STANDARD";
@@ -226,7 +229,7 @@ export function registerCampaignTools(server: McpServer, client: YandexDirectCli
         if (Object.keys(campaign).length === 1) {
           return fail("Нужно указать хотя бы одно поле для обновления.");
         }
-        const result = await client.call("campaigns", "update", { Campaigns: [campaign] });
+        const result = await client.call("campaigns", "update", { Campaigns: [campaign] }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);

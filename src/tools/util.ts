@@ -13,6 +13,23 @@ import { YandexDirectError } from "../types.js";
 export const isoDate = () =>
   z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Дата должна быть в формате YYYY-MM-DD");
 
+/**
+ * The per-call account selector every tool exposes. An agency token serves many
+ * client accounts; this parameter routes ONE call to ONE of them via the
+ * Client-Login header. Omitted → the account from YANDEX_DIRECT_LOGIN (or the
+ * token owner's own account). A factory for the same $ref-dedupe reason as isoDate.
+ */
+export const loginParam = () =>
+  z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Логин клиента (Client-Login) для этого вызова. Обязателен при агентском токене, " +
+        "чтобы выбрать аккаунт; без него запрос идёт в аккаунт из YANDEX_DIRECT_LOGIN " +
+        "или в собственный аккаунт владельца токена. Список логинов — list_agency_clients.",
+    );
+
 export function ok(data: unknown): CallToolResult {
   // Compact JSON (no indent): the consumer is an LLM, pretty-printing only burns tokens.
   // `JSON.stringify(undefined)` is `undefined` (not a string) — guard it so we never emit

@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { buildPage, compact, fail, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
+import { buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
 
 const DEFAULT_FIELDS = ["Id", "Name", "CampaignId", "RegionIds", "Status", "Type"];
 
@@ -23,9 +23,10 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
           .boolean()
           .optional()
           .describe("Забрать все страницы, идя по LimitedBy (limit тогда не ограничивает общий объём)."),
+        login: loginParam(),
       },
     },
-    async ({ campaignIds, ids, fieldNames, limit, offset, autoPaginate }) => {
+    async ({ campaignIds, ids, fieldNames, limit, offset, autoPaginate, login }) => {
       try {
         const selection = compact({
           CampaignIds: campaignIds?.length ? campaignIds : undefined,
@@ -38,8 +39,8 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
         const result = autoPaginate
-          ? await client.getAll("adgroups", params)
-          : await client.call("adgroups", "get", params);
+          ? await client.getAll("adgroups", params, undefined, undefined, login)
+          : await client.call("adgroups", "get", params, login);
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -60,12 +61,13 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
           .array(z.number().int())
           .min(1)
           .describe("Id регионов показа, например [225] — Россия."),
+        login: loginParam(),
       },
     },
-    async ({ name, campaignId, regionIds }) => {
+    async ({ name, campaignId, regionIds, login }) => {
       try {
         const adGroup = { Name: name, CampaignId: campaignId, RegionIds: regionIds };
-        const result = await client.call("adgroups", "add", { AdGroups: [adGroup] });
+        const result = await client.call("adgroups", "add", { AdGroups: [adGroup] }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -91,9 +93,10 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
           .array(z.string())
           .optional()
           .describe("Заменяет минус-фразы группы; пустой массив очищает их."),
+        login: loginParam(),
       },
     },
-    async ({ id, name, regionIds, negativeKeywords }) => {
+    async ({ id, name, regionIds, negativeKeywords, login }) => {
       try {
         const adGroup = compact({
           Id: id,
@@ -104,7 +107,7 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
         if (Object.keys(adGroup).length === 1) {
           return fail("Нужно указать хотя бы одно поле для обновления.");
         }
-        const result = await client.call("adgroups", "update", { AdGroups: [adGroup] });
+        const result = await client.call("adgroups", "update", { AdGroups: [adGroup] }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -121,11 +124,12 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
         "Удаляет группы объявлений по id (adgroups/delete). Вместе с группой удаляются её объявления и ключевые фразы; отменить это нельзя.",
       inputSchema: {
         ids: z.array(z.number().int()).min(1).describe("Id групп, которые нужно удалить."),
+        login: loginParam(),
       },
     },
-    async ({ ids }) => {
+    async ({ ids, login }) => {
       try {
-        const result = await client.call("adgroups", "delete", { SelectionCriteria: { Ids: ids } });
+        const result = await client.call("adgroups", "delete", { SelectionCriteria: { Ids: ids } }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);

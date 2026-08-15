@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { fail, ok, READ_ONLY } from "./util.js";
+import { fail, loginParam, ok, READ_ONLY } from "./util.js";
 
 const DICTIONARY_NAMES = [
   "GeoRegions",
@@ -27,6 +27,7 @@ export interface GeoRegion {
  * Keyed by the client (a WeakMap, so it never outlives it) → correct per token/language.
  * In the per-request askads deploy the client is short-lived so this is a no-op there, but
  * standalone/long-lived clients skip the repeated download.
+ * Кеш сознательно общий для всех логинов: справочник GeoRegions не зависит от аккаунта.
  */
 const geoRegionsCache = new WeakMap<YandexDirectClient, GeoRegion[]>();
 
@@ -57,15 +58,16 @@ export function registerDictionaryTools(server: McpServer, client: YandexDirectC
           .optional()
           .describe("Подстрока названия региона без учёта регистра, например 'Москва' или 'Moscow'."),
         limit: z.number().int().min(1).max(1000).optional().describe("Максимум регионов в ответе. По умолчанию 50."),
+        login: loginParam(),
       },
     },
-    async ({ query, limit }) => {
+    async ({ query, limit, login }) => {
       try {
         let all = geoRegionsCache.get(client);
         if (!all) {
           const result = await client.call<{ GeoRegions?: GeoRegion[] }>("dictionaries", "get", {
             DictionaryNames: ["GeoRegions"],
-          });
+          }, login);
           all = result.GeoRegions ?? [];
           geoRegionsCache.set(client, all);
         }
@@ -86,11 +88,12 @@ export function registerDictionaryTools(server: McpServer, client: YandexDirectC
         "Возвращает справочники Яндекс Директа (валюты, часовые пояса, константы, категории объявлений, …). GeoRegions может быть очень большим — для поиска регионов лучше get_regions.",
       inputSchema: {
         names: z.array(z.enum(DICTIONARY_NAMES)).min(1).describe("Названия нужных справочников."),
+        login: loginParam(),
       },
     },
-    async ({ names }) => {
+    async ({ names, login }) => {
       try {
-        const result = await client.call("dictionaries", "get", { DictionaryNames: names });
+        const result = await client.call("dictionaries", "get", { DictionaryNames: names }, login);
         return ok(result);
       } catch (e) {
         return fail(e);

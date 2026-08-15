@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { compact, fail, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
+import { compact, fail, loginParam, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
 
 const BID_MODIFIER_TYPES = [
   "MOBILE_ADJUSTMENT",
@@ -38,9 +38,10 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
           .array(z.enum(LEVELS))
           .optional()
           .describe("Уровни, на которых читать. По умолчанию оба: CAMPAIGN и AD_GROUP."),
+        login: loginParam(),
       },
     },
-    async ({ campaignIds, adGroupIds, ids, types, levels }) => {
+    async ({ campaignIds, adGroupIds, ids, types, levels, login }) => {
       try {
         if (!campaignIds?.length && !adGroupIds?.length && !ids?.length) {
           return fail("Нужно указать хотя бы одно из: campaignIds, adGroupIds или ids.");
@@ -64,7 +65,7 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
           // this the video adjustment is silently never returned.
           VideoAdjustmentFieldNames: ["BidModifier"],
         };
-        const result = await client.call("bidmodifiers", "get", params);
+        const result = await client.call("bidmodifiers", "get", params, login);
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -116,9 +117,10 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
           .array(z.object({ regionId: z.number().int(), percent: z.number().int().min(0) }))
           .optional()
           .describe("Корректировки по регионам."),
+        login: loginParam(),
       },
     },
-    async ({ campaignId, adGroupId, mobile, desktop, demographics, retargeting, regional }) => {
+    async ({ campaignId, adGroupId, mobile, desktop, demographics, retargeting, regional, login }) => {
       try {
         if ((campaignId === undefined) === (adGroupId === undefined)) {
           return fail("Нужно указать ровно одно: campaignId или adGroupId.");
@@ -147,7 +149,7 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
         if (!hasAdjustment) {
           return fail("Нужно указать хотя бы одну корректировку: mobile, desktop, demographics, retargeting или regional.");
         }
-        const result = await client.call("bidmodifiers", "add", { BidModifiers: [item] });
+        const result = await client.call("bidmodifiers", "add", { BidModifiers: [item] }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -175,12 +177,13 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
           )
           .min(1)
           .describe("В каждом элементе нужны id и percent."),
+        login: loginParam(),
       },
     },
-    async ({ bids }) => {
+    async ({ bids, login }) => {
       try {
         const BidModifiers = bids.map((b) => ({ Id: b.id, BidModifier: b.percent }));
-        const result = await client.call("bidmodifiers", "set", { BidModifiers });
+        const result = await client.call("bidmodifiers", "set", { BidModifiers }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -196,13 +199,12 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
       description: "Удаляет корректировки ставок по id (bidmodifiers/delete).",
       inputSchema: {
         ids: z.array(z.number().int()).min(1).describe("Id корректировок, которые нужно удалить."),
+        login: loginParam(),
       },
     },
-    async ({ ids }) => {
+    async ({ ids, login }) => {
       try {
-        const result = await client.call("bidmodifiers", "delete", {
-          SelectionCriteria: { Ids: ids },
-        });
+        const result = await client.call("bidmodifiers", "delete", { SelectionCriteria: { Ids: ids } }, login);
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
