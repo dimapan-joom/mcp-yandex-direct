@@ -61,7 +61,12 @@
 
 | Переменная | Обяз. | По умолчанию | Описание |
 | --- | --- | --- | --- |
-| `YANDEX_DIRECT_TOKEN` | да | — | OAuth-токен Яндекс Директа. |
+| `YANDEX_DIRECT_TOKEN` | один из режимов | — | Статический OAuth-токен (простой режим). Игнорируется, если задано OAuth-трио. |
+| `YANDEX_OAUTH_CLIENT_ID` | с трио | — | ClientID приложения — режим самообновляющегося токена. |
+| `YANDEX_OAUTH_CLIENT_SECRET` | с трио | — | Пароль приложения. |
+| `YANDEX_OAUTH_REFRESH_TOKEN` | с трио | — | Refresh-токен; сервер сам обменивает его на access-токен и повторяет запрос при 401/коде 53. |
+| `YANDEX_OAUTH_TOKEN_URL` | нет | `https://oauth.yandex.ru/token` | Переопределение OAuth-эндпоинта (только https). |
+| `YANDEX_OAUTH_TIMEOUT_MS` | нет | `YANDEX_DIRECT_TIMEOUT_MS`, иначе `30000` | Таймаут обмена токена, мс. |
 | `YANDEX_DIRECT_LOGIN` | нет | — | Заголовок `Client-Login` (агентские аккаунты). |
 | `YANDEX_DIRECT_LANG` | нет | `ru` | Язык ответов API (`ru`, `en`, `uk`, `tr`). |
 | `YANDEX_DIRECT_SANDBOX` | нет | `false` | Использовать песочницу API. |

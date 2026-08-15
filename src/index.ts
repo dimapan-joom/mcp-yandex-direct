@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { YandexDirectClient } from "./client.js";
-import { ConfigError, loadConfig } from "./config.js";
-import type { YandexDirectConfig } from "./types.js";
+import { ConfigError, loadConfig, type LoadedConfig } from "./config.js";
+import { createTokenProvider } from "./auth/tokenProvider.js";
 
 /** Reads the package version so the server reports its real version to MCP clients. */
 function readVersion(): string {
@@ -56,7 +56,7 @@ const INSTRUCTIONS =
  * process dies. An unconfigured server exits before the MCP handshake, so stderr
  * is the only place the operator ever sees the reason.
  */
-function loadConfigOrExit(): YandexDirectConfig {
+function loadConfigOrExit(): LoadedConfig {
   try {
     return loadConfig();
   } catch (err) {
@@ -67,8 +67,8 @@ function loadConfigOrExit(): YandexDirectConfig {
 }
 
 async function main(): Promise<void> {
-  const config = loadConfigOrExit();
-  const client = new YandexDirectClient(config);
+  const { config, auth } = loadConfigOrExit();
+  const client = new YandexDirectClient(config, createTokenProvider(auth));
 
   const server = new McpServer(
     {

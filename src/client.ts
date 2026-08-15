@@ -1,5 +1,6 @@
 import type { ApiError, YandexDirectConfig } from "./types.js";
 import { YandexDirectError } from "./types.js";
+import { staticToken, type TokenProvider } from "./auth/tokenProvider.js";
 import { DEFAULT_PAGE_LIMIT, isReadMethod } from "./tools/util.js";
 
 const PROD_BASE = "https://api.direct.yandex.com/json/v5/";
@@ -46,7 +47,12 @@ export class YandexDirectClient {
   private readonly retryBaseMs: number;
   private latestUnits?: Units;
 
-  constructor(private readonly config: YandexDirectConfig) {
+  constructor(
+    private readonly config: YandexDirectConfig,
+    // Defaulting to a static provider keeps every existing `new YandexDirectClient({token})`
+    // call site (tests included) working unchanged; index.ts passes the real provider.
+    private readonly tokens: TokenProvider = staticToken(config.token ?? ""),
+  ) {
     this.base = config.sandbox ? SANDBOX_BASE : PROD_BASE;
     this.v4Base = config.sandbox ? SANDBOX_V4_BASE : PROD_V4_BASE;
     this.timeoutMs = config.timeoutMs ?? 60_000;
@@ -93,14 +99,32 @@ export class YandexDirectClient {
     }
   }
 
-  private headers(extra?: Record<string, string>): Record<string, string> {
+  /**
+   * Builds request headers around an already-minted Bearer token. Callers fetch the
+   * token themselves (one per loop iteration) so the SAME value goes into the request
+   * and into tokens.invalidate() on an auth failure — fetching twice could straddle a
+   * cache refresh and invalidate the wrong token. Client-Login stays orthogonal to
+   * auth: one token serves all logins.
+   */
+  private buildHeaders(token: string, extra?: Record<string, string>): Record<string, string> {
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.config.token}`,
+      Authorization: `Bearer ${token}`,
       "Accept-Language": this.config.lang,
       "Content-Type": "application/json; charset=utf-8",
     };
     if (this.config.login) headers["Client-Login"] = this.config.login;
     return { ...headers, ...extra };
+  }
+
+  /**
+   * True when the response is an auth rejection worth ONE re-mint + retry.
+   * Code 53 = «Ошибка авторизации» (invalid/revoked token). Deliberately NOT
+   * 52 (auth server down — transient, already in RETRYABLE_CODES), NOT 54
+   * («нет прав» — a fresh token grants no new rights) and NOT 8000 (covers
+   * genuinely malformed requests too).
+   */
+  private static isAuthFailure(status: number, errorCode?: number): boolean {
+    return status === 401 || errorCode === 53;
   }
 
   /** Calls a JSON service (campaigns, ads, keywords, ...) and returns its `result` object. */
@@ -126,7 +150,10 @@ export class YandexDirectClient {
     // so a blind retry could duplicate it. Rate-limit codes (429/506/52) mean the request
     // was NOT processed and are retried for any method (handled below).
     const idempotent = isReadMethod(method);
-    for (let attempt = 0; ; attempt++) {
+    // At most ONE token re-mint per logical request, outside the transient budget.
+    let reauthUsed = false;
+    for (let attempt = 0; ; ) {
+      const token = await this.tokens.getToken();
       let res: Response;
       let text: string;
       try {
@@ -134,7 +161,7 @@ export class YandexDirectClient {
           target.toString(),
           {
             method: "POST",
-            headers: this.headers(),
+            headers: this.buildHeaders(token),
             body: JSON.stringify({ method, params }),
           },
           service,
@@ -143,6 +170,7 @@ export class YandexDirectClient {
         // Network error or timeout: retry idempotent reads within budget, else rethrow.
         if (idempotent && attempt < this.maxRetries) {
           await delay(this.backoffMs(attempt));
+          attempt++;
           continue;
         }
         throw err;
@@ -151,11 +179,21 @@ export class YandexDirectClient {
       const units = parseUnits(res.headers.get("Units"));
       if (units) this.latestUnits = units;
 
+      // Auth rejection (HTTP 401): like 429, the request was NOT executed — it died
+      // at the auth gate — so a retry with a fresh token is safe for ANY method,
+      // writes included. Static tokens return false from invalidate() → no retry,
+      // preserving the original behaviour.
+      if (YandexDirectClient.isAuthFailure(res.status) && !reauthUsed && this.tokens.invalidate(token)) {
+        reauthUsed = true;
+        continue; // deliberately does NOT consume the transient `attempt` budget
+      }
+
       // HTTP 429 means the request was NOT processed, so (like error codes 506/52)
       // it is safe to retry for ANY method, writes included.
       if (res.status === 429) {
         if (attempt < this.maxRetries) {
           await delay(this.backoffMs(attempt, res));
+          attempt++;
           continue;
         }
         throw new Error(
@@ -168,6 +206,7 @@ export class YandexDirectClient {
       if (res.status >= 500 && res.status < 600) {
         if (idempotent && attempt < this.maxRetries) {
           await delay(this.backoffMs(attempt, res));
+          attempt++;
           continue;
         }
         throw new Error(
@@ -185,8 +224,18 @@ export class YandexDirectClient {
       }
 
       if (data.error) {
+        // Error code 53 = invalid/revoked token, same auth-gate semantics as HTTP 401.
+        if (
+          YandexDirectClient.isAuthFailure(res.status, data.error.error_code) &&
+          !reauthUsed &&
+          this.tokens.invalidate(token)
+        ) {
+          reauthUsed = true;
+          continue;
+        }
         if (RETRYABLE_CODES.has(data.error.error_code) && attempt < this.maxRetries) {
           await delay(this.backoffMs(attempt, res));
+          attempt++;
           continue;
         }
         throw new YandexDirectError(data.error);
@@ -215,7 +264,10 @@ export class YandexDirectClient {
     // so idempotency keys off Action=Get. Only reads are retried on a transient network
     // error or 5xx; a write action (Deposit/Update/…) must never be blindly re-sent.
     const idempotent = String(param.Action ?? "").toLowerCase() === "get";
-    for (let attempt = 0; ; attempt++) {
+    // Same one-shot re-auth as call(): v4 carries the token in the BODY, not a header.
+    let reauthUsed = false;
+    for (let attempt = 0; ; ) {
+      const token = await this.tokens.getToken();
       let res: Response;
       let text: string;
       try {
@@ -224,13 +276,14 @@ export class YandexDirectClient {
           {
             method: "POST",
             headers: { "Content-Type": "application/json; charset=utf-8" },
-            body: JSON.stringify({ method, token: this.config.token, locale: this.config.lang, param }),
+            body: JSON.stringify({ method, token, locale: this.config.lang, param }),
           },
           method,
         ));
       } catch (err) {
         if (idempotent && attempt < this.maxRetries) {
           await delay(this.backoffMs(attempt));
+          attempt++;
           continue;
         }
         throw err;
@@ -239,6 +292,7 @@ export class YandexDirectClient {
       if (res.status >= 500 && res.status < 600) {
         if (idempotent && attempt < this.maxRetries) {
           await delay(this.backoffMs(attempt, res));
+          attempt++;
           continue;
         }
         throw new Error(
@@ -256,6 +310,12 @@ export class YandexDirectClient {
       }
 
       if (data.error_code !== undefined) {
+        // v4 code 53 = authorization error, same auth-gate semantics as v5 —
+        // the request was rejected before execution, one fresh-token retry is safe.
+        if (data.error_code === 53 && !reauthUsed && this.tokens.invalidate(token)) {
+          reauthUsed = true;
+          continue;
+        }
         const detail = data.error_detail ? `: ${data.error_detail}` : "";
         throw new Error(`Ошибка Live v4 "${method}": [${data.error_code}] ${data.error_str ?? ""}${detail}`);
       }
@@ -355,21 +415,27 @@ export class YandexDirectClient {
   /** Requests a TSV statistics report, polling while Yandex generates it. */
   async report(params: Record<string, unknown>, opts: ReportOptions = {}): Promise<string> {
     const url = this.base + "reports";
-    const headers = this.headers({
+    const extraHeaders = {
       processingMode: opts.processingMode ?? "auto",
       returnMoneyInMicros: String(opts.returnMoneyInMicros ?? false),
       skipReportHeader: "true",
       skipReportSummary: "true",
-    });
+    };
     const maxPolls = opts.maxPolls ?? 10;
     let lastStatus = 0;
+    // One-shot re-auth, same semantics as call(): a 401 means the poll request
+    // never reached the report queue, so retrying it cannot double-submit.
+    let reauthUsed = false;
 
     for (let attempt = 0; attempt < maxPolls; attempt++) {
+      const token = await this.tokens.getToken();
+      // Headers are rebuilt EVERY poll: a long offline report is exactly the
+      // window in which a cached token can expire mid-generation.
       const { res, text } = await this.fetchWithTimeout(
         url,
         {
           method: "POST",
-          headers,
+          headers: this.buildHeaders(token, extraHeaders),
           body: JSON.stringify({ params }),
         },
         "reports",
@@ -377,6 +443,12 @@ export class YandexDirectClient {
       lastStatus = res.status;
 
       if (res.status === 200) return text;
+
+      if (res.status === 401 && !reauthUsed && this.tokens.invalidate(token)) {
+        reauthUsed = true;
+        attempt--; // the rejected poll never counted against the report queue
+        continue;
+      }
 
       // 201/202: report still generating. 5xx: transient server error during
       // generation — the docs recommend retrying after retryIn rather than

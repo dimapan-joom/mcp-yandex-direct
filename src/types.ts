@@ -1,5 +1,9 @@
 export interface YandexDirectConfig {
-  token: string;
+  /**
+   * Static access token (upstream auth mode). Optional since the refresh-token
+   * mode keeps secrets off this object entirely — see AuthConfig.
+   */
+  token?: string;
   login?: string;
   lang: string;
   sandbox: boolean;
@@ -10,6 +14,23 @@ export interface YandexDirectConfig {
   /** Base backoff in milliseconds, doubled each retry. Defaults to 500. */
   retryBaseMs?: number;
 }
+
+/**
+ * How the server authenticates to the Direct API. Resolved once at startup by
+ * loadConfig(); consumed only by createTokenProvider(). Secrets deliberately live
+ * here (and then in the provider's closure) rather than on YandexDirectConfig,
+ * so serializing/printing the config can never leak them.
+ */
+export type AuthConfig =
+  | { kind: "static"; token: string }
+  | {
+      kind: "refreshing";
+      clientId: string;
+      clientSecret: string;
+      refreshToken: string;
+      tokenUrl: string;
+      timeoutMs: number;
+    };
 
 export interface ApiError {
   error_code: number;

@@ -2,6 +2,7 @@
 // Read-only smoke check against the configured Yandex Direct account.
 // Run locally with your own token in the environment — it makes no writes.
 import { YandexDirectClient } from "./client.js";
+import { createTokenProvider } from "./auth/tokenProvider.js";
 import { loadConfig } from "./config.js";
 
 interface Account {
@@ -11,8 +12,8 @@ interface Account {
 }
 
 async function main(): Promise<void> {
-  const config = loadConfig();
-  const client = new YandexDirectClient(config);
+  const { config, auth } = loadConfig();
+  const client = new YandexDirectClient(config, createTokenProvider(auth));
   const target = config.sandbox ? "sandbox" : "PRODUCTION";
   console.log(`Yandex Direct smoke check (${target}, read-only)\n`);
 

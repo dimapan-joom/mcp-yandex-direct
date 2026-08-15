@@ -2,6 +2,7 @@
 // Sandbox integration check: a read pass plus a create/delete write round-trip.
 // Hard-guarded to the sandbox so it can never write to a real account.
 import { YandexDirectClient } from "./client.js";
+import { createTokenProvider } from "./auth/tokenProvider.js";
 import { loadConfig } from "./config.js";
 
 interface ObjectResult {
@@ -26,12 +27,12 @@ function firstError(result?: ObjectResult): string {
 }
 
 async function main(): Promise<void> {
-  const config = loadConfig();
+  const { config, auth } = loadConfig();
   if (!config.sandbox) {
     console.error("Refusing to run: integration writes require the sandbox (set YANDEX_DIRECT_SANDBOX=true).");
     process.exit(1);
   }
-  const client = new YandexDirectClient(config);
+  const client = new YandexDirectClient(config, createTokenProvider(auth));
   console.log("Yandex Direct sandbox integration check\n");
 
   // 1. Read: account info (also carries the Units quota header).

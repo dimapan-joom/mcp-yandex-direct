@@ -630,3 +630,172 @@ test("YandexDirectError appends request_id to the message when present", () => {
   assert.match(err.message, /request_id: abc123/);
   assert.equal(err.requestId, "abc123");
 });
+
+// --- re-auth: one fresh-token retry on 401 / error code 53 -------------------
+
+import type { TokenProvider } from "./auth/tokenProvider.js";
+
+/** A provider whose tokens change on every invalidate — the refreshing shape. */
+function rotatingProvider(tokens: string[]): TokenProvider & { invalidations: string[] } {
+  let index = 0;
+  const invalidations: string[] = [];
+  return {
+    kind: "refreshing",
+    invalidations,
+    getToken: async () => tokens[Math.min(index, tokens.length - 1)],
+    invalidate(used: string) {
+      invalidations.push(used);
+      index++;
+      return true;
+    },
+  };
+}
+
+const BASE_CONFIG = { lang: "ru", sandbox: true, retryBaseMs: 0 };
+
+test("call() re-mints once on HTTP 401 and retries — writes included", async () => {
+  let calls = 0;
+  const mock = mockFetch((_url, init) => {
+    calls++;
+    const auth = ((init.headers ?? {}) as Record<string, string>).Authorization;
+    if (auth === "Bearer stale") return new Response("unauthorized", { status: 401 });
+    return new Response(JSON.stringify({ result: { AddResults: [{ Id: 1 }] } }), { status: 200 });
+  });
+  try {
+    const provider = rotatingProvider(["stale", "fresh"]);
+    // "add" is a WRITE: safe to retry because a 401 died at the auth gate.
+    const client = new YandexDirectClient(BASE_CONFIG, provider);
+    const result = await client.call("campaigns", "add", {});
+    assert.deepEqual(result, { AddResults: [{ Id: 1 }] });
+    assert.equal(calls, 2, "exactly one retry after the re-mint");
+    assert.deepEqual(provider.invalidations, ["stale"]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("call() re-mints once on error code 53 in the body", async () => {
+  let calls = 0;
+  const mock = mockFetch((_url, init) => {
+    calls++;
+    const auth = ((init.headers ?? {}) as Record<string, string>).Authorization;
+    if (auth === "Bearer stale") {
+      return new Response(
+        JSON.stringify({ error: { error_code: 53, error_string: "Authorization error" } }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ result: { Campaigns: [] } }), { status: 200 });
+  });
+  try {
+    const client = new YandexDirectClient(BASE_CONFIG, rotatingProvider(["stale", "fresh"]));
+    const result = await client.call("campaigns", "get", {});
+    assert.deepEqual(result, { Campaigns: [] });
+    assert.equal(calls, 2);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("call() re-auths at most ONCE: a second 401 is fatal", async () => {
+  let calls = 0;
+  const mock = mockFetch(() => {
+    calls++;
+    return new Response("unauthorized", { status: 401 });
+  });
+  try {
+    const client = new YandexDirectClient(BASE_CONFIG, rotatingProvider(["a", "b", "c"]));
+    await assert.rejects(() => client.call("campaigns", "get", {}));
+    assert.equal(calls, 2, "one original + one re-auth retry, never a loop");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("call() with a static token does NOT retry a 401 (original behaviour)", async () => {
+  let calls = 0;
+  const mock = mockFetch(() => {
+    calls++;
+    return new Response(
+      JSON.stringify({ error: { error_code: 53, error_string: "Authorization error" } }),
+      { status: 200 },
+    );
+  });
+  try {
+    // Default provider comes from config.token — the static path.
+    const client = new YandexDirectClient({ token: "T", ...BASE_CONFIG });
+    await assert.rejects(() => client.call("campaigns", "get", {}), /\[53\]/);
+    assert.equal(calls, 1, "static tokens cannot be re-minted, so no retry");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("re-auth does not consume the transient retry budget", async () => {
+  // Sequence: 401 (re-auth, free) → 500 → 500 → 500 → 200. With maxRetries=3 the
+  // three 5xx retries must all still be available after the re-auth retry.
+  const responses = [
+    new Response("unauthorized", { status: 401 }),
+    new Response("boom", { status: 500 }),
+    new Response("boom", { status: 500 }),
+    new Response("boom", { status: 500 }),
+    new Response(JSON.stringify({ result: { Campaigns: [] } }), { status: 200 }),
+  ];
+  let calls = 0;
+  const mock = mockFetch(() => responses[calls++]);
+  try {
+    const client = new YandexDirectClient(
+      { ...BASE_CONFIG, maxRetries: 3 },
+      rotatingProvider(["stale", "fresh"]),
+    );
+    const result = await client.call("campaigns", "get", {});
+    assert.deepEqual(result, { Campaigns: [] });
+    assert.equal(calls, 5);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("callV4() re-mints once on v4 error_code 53", async () => {
+  let calls = 0;
+  const mock = mockFetch((_url, init) => {
+    calls++;
+    const body = JSON.parse(String(init.body)) as { token?: string };
+    if (body.token === "stale") {
+      return new Response(JSON.stringify({ error_code: 53, error_str: "Invalid token" }), {
+        status: 200,
+      });
+    }
+    return new Response(JSON.stringify({ data: { Accounts: [] } }), { status: 200 });
+  });
+  try {
+    const client = new YandexDirectClient(BASE_CONFIG, rotatingProvider(["stale", "fresh"]));
+    const result = await client.callV4("AccountManagement", { Action: "Get" });
+    assert.deepEqual(result, { Accounts: [] });
+    assert.equal(calls, 2);
+    const retryBody = JSON.parse(String(mock.calls[1].init.body)) as { token?: string };
+    assert.equal(retryBody.token, "fresh", "the retry must carry the re-minted token");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("report() re-mints once on 401 and rebuilds headers per poll", async () => {
+  let calls = 0;
+  const mock = mockFetch((_url, init) => {
+    calls++;
+    const auth = ((init.headers ?? {}) as Record<string, string>).Authorization;
+    if (auth === "Bearer stale") return new Response("unauthorized", { status: 401 });
+    return new Response("Date\tCost\n2026-08-14\t100.00", { status: 200 });
+  });
+  try {
+    const client = new YandexDirectClient(BASE_CONFIG, rotatingProvider(["stale", "fresh"]));
+    const tsv = await client.report({ ReportName: "r" });
+    assert.match(tsv, /100\.00/);
+    assert.equal(calls, 2);
+    const retryAuth = ((mock.calls[1].init.headers ?? {}) as Record<string, string>).Authorization;
+    assert.equal(retryAuth, "Bearer fresh");
+  } finally {
+    mock.restore();
+  }
+});
