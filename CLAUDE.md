@@ -21,13 +21,13 @@ More detail in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Tool list: [docs/TOOL
 - `src/tools/*.ts` — one file per service, each exports `register<Name>Tools(server, client)`.
 - `src/tools/util.ts` — shared helpers (see conventions below).
 - `src/index.ts` — wires every `register*` into the McpServer.
-- `src/telemetry.ts` — anonymous usage pings (ids/names/versions only, never data or
-  arguments; fire-and-forget, must never block or throw; opt-out `ASKADS_TELEMETRY=0`).
-  `startup_failed` is the exception: `sendBlocking` awaits it, because the caller
-  exits right after and a fire-and-forget ping would die in flight. Its `reason`
-  is a closed vocabulary (`missing_token`, …) — never a variable's name or value.
 - `src/config.ts` — env → config; throws `ConfigError` (with a `reason` code) instead
-  of exiting, so `index.ts` can report the drop-off before dying.
+  of exiting, so `index.ts` can report the reason on stderr before dying.
+
+This is the Joom fork. Upstream's `src/telemetry.ts` (anonymous pings to a third-party
+endpoint, carrying the invoked tool's name) is deleted, not flag-disabled. The server
+must never contact any host other than the Yandex Direct API — when merging upstream,
+reject anything that reintroduces an outbound call.
 
 ## Conventions (do not break)
 

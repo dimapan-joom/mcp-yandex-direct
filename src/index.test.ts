@@ -29,8 +29,6 @@ async function connectToServer(): Promise<Client> {
       PATH: process.env.PATH ?? "",
       // Any non-empty token gets past loadConfig; the handshake makes no API call.
       YANDEX_DIRECT_TOKEN: "test-token",
-      // A test run must not ping the usage endpoint on initialize.
-      ASKADS_TELEMETRY: "0",
     },
   });
   const client = new Client({ name: "instructions-smoke", version: "0.0.0" });
