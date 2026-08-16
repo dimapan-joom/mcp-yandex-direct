@@ -9,6 +9,19 @@
 
 ### Добавлено (форк Joom)
 
+- Полная мощность сервиса Reports в get_statistics: тип CUSTOM_REPORT (произвольные
+  разрезы — устройства, пол/возраст, регионы, площадки), поля выручки и конверсий
+  (Revenue, Profit, GoalsRoi, Conversions, CostPerConversion), разрез по целям Метрики
+  через goals (до 10) и attributionModels (FCCD/LC/LSCCD/AUTO), произвольные условия
+  отбора через filters (складываются с campaignIds по И), полный список DateRangeType
+  (LAST_3_DAYS, THIS_WEEK_MON_TODAY, AUTO и остальные). Готового ROAS в API Директа нет —
+  описание инструмента прямо говорит считать его как Revenue / Cost и предупреждает,
+  что почасовой статистики не существует ни в каком виде.
+- Мультиаккаунтность: опциональный параметр `login` (заголовок `Client-Login`) во всех
+  инструментах, кроме `get_balance`, плюс новый `list_agency_clients` (`agencyclients/get`,
+  запрос сознательно уходит без `Client-Login`). Один процесс сервера с агентским токеном
+  обслуживает все клиентские аккаунты; без `login` поведение прежнее — аккаунт из
+  `YANDEX_DIRECT_LOGIN` или собственный аккаунт владельца токена.
 - Авторизация по refresh-токену. Трио `YANDEX_OAUTH_CLIENT_ID` / `YANDEX_OAUTH_CLIENT_SECRET` /
   `YANDEX_OAUTH_REFRESH_TOKEN` включает самообновляющийся access-токен: кэш в памяти с
   упреждающим обновлением (потолок 12 ч), single-flight при параллельных вызовах, ротация

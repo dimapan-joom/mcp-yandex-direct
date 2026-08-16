@@ -47,7 +47,7 @@
 
 | Инструмент | Что делает |
 | --- | --- |
-| `get_statistics` | Отчёт через сервис Reports. Обычные типы (CAMPAIGN/ADGROUP/AD/CRITERIA/ACCOUNT) возвращают TSV-строки (сверх ~1 МБ / 100 тыс. строк ответ обрезается с явной пометкой `[_truncated]`); `SEARCH_QUERY_PERFORMANCE_REPORT` — вычисленную сводку (JSON: итоги по всем строкам + топ-N + хвост + счётчики нулевых кликов/конверсий). |
+| `get_statistics` | Отчёт через сервис Reports. Обычные типы (CAMPAIGN/ADGROUP/AD/CRITERIA/ACCOUNT) возвращают TSV-строки (сверх ~1 МБ / 100 тыс. строк ответ обрезается с явной пометкой `[_truncated]`); `SEARCH_QUERY_PERFORMANCE_REPORT` — вычисленную сводку (JSON: итоги по всем строкам + топ-N + хвост + счётчики нулевых кликов/конверсий). `CUSTOM_REPORT` даёт произвольные разрезы (устройства, пол/возраст, регионы, площадки) через `fieldNames`. Деньги и конверсии: `Revenue`, `Conversions`, `CostPerConversion`, `Profit`, `GoalsRoi`; разрез по целям Метрики — `goals` (до 10) и `attributionModels` (`FCCD`/`LC`/`LSCCD`/`AUTO`). Сложный отбор — `filters` (складывается с `campaignIds` по И). Почасовой разбивки в API Директа нет — минимум сутки. |
 | `raw_request` | Прямой вызов любого сервиса/метода (полное покрытие API). Записи требуют `confirmWrite=true`. |
 
 ## Деньги и постраничная выдача

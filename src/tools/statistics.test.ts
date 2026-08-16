@@ -258,3 +258,71 @@ test("get_statistics returns the raw TSV when a campaign filter has data rows", 
   assert.equal(res.isError, undefined);
   assert.match(res.content[0].text, /My campaign/);
 });
+
+// --- revenue / goals / attribution / arbitrary filters -----------------------
+
+test("goals and attributionModels ride NEXT TO SelectionCriteria, not inside it", async () => {
+  const { calls, tools } = harness(() => `${CAMPAIGN_HEADER}\n1\tC\t1\t1\t1\t1\t1\n`);
+  await tools.get_statistics({
+    fieldNames: ["CampaignName", "Cost", "Revenue", "Conversions"],
+    goals: ["20002", "20003"],
+    attributionModels: ["LSCCD"],
+  });
+  assert.deepEqual(calls[0].Goals, ["20002", "20003"]);
+  assert.deepEqual(calls[0].AttributionModels, ["LSCCD"]);
+  assert.equal(calls[0].SelectionCriteria.Goals, undefined, "Goals must not be nested in SelectionCriteria");
+  assert.ok(calls[0].FieldNames.includes("Revenue"));
+});
+
+test("omitting goals sends neither Goals nor AttributionModels", async () => {
+  const { calls, tools } = harness(() => `${CAMPAIGN_HEADER}\n1\tC\t1\t1\t1\t1\t1\n`);
+  await tools.get_statistics({});
+  assert.equal("Goals" in calls[0], false);
+  assert.equal("AttributionModels" in calls[0], false);
+});
+
+test("arbitrary filters are ANDed with the campaignIds shorthand", async () => {
+  const { calls, tools } = harness(() => `${CAMPAIGN_HEADER}\n1\tC\t1\t1\t1\t1\t1\n`);
+  await tools.get_statistics({
+    campaignIds: [123],
+    filters: [{ field: "Clicks", operator: "GREATER_THAN", values: ["0"] }],
+  });
+  assert.deepEqual(calls[0].SelectionCriteria.Filter, [
+    { Field: "CampaignId", Operator: "IN", Values: ["123"] },
+    { Field: "Clicks", Operator: "GREATER_THAN", Values: ["0"] },
+  ]);
+});
+
+test("filters alone (no campaignIds) still build a Filter array", async () => {
+  const { calls, tools } = harness(() => `${CAMPAIGN_HEADER}\n1\tC\t1\t1\t1\t1\t1\n`);
+  await tools.get_statistics({
+    filters: [{ field: "Device", operator: "EQUALS", values: ["MOBILE"] }],
+  });
+  assert.deepEqual(calls[0].SelectionCriteria.Filter, [
+    { Field: "Device", Operator: "EQUALS", Values: ["MOBILE"] },
+  ]);
+});
+
+test("no filters at all leaves SelectionCriteria without a Filter key", async () => {
+  const { calls, tools } = harness(() => `${CAMPAIGN_HEADER}\n1\tC\t1\t1\t1\t1\t1\n`);
+  await tools.get_statistics({});
+  assert.equal("Filter" in calls[0].SelectionCriteria, false);
+});
+
+test("CUSTOM_REPORT passes caller-chosen dimensions straight through", async () => {
+  const header = "Device\tCost\tClicks";
+  const { calls, tools } = harness(() => `${header}\nMOBILE\t100.00\t20\n`);
+  const res = await tools.get_statistics({
+    reportType: "CUSTOM_REPORT",
+    fieldNames: ["Device", "Cost", "Clicks"],
+  });
+  assert.equal(calls[0].ReportType, "CUSTOM_REPORT");
+  assert.deepEqual(calls[0].FieldNames, ["Device", "Cost", "Clicks"]);
+  assert.match(res.content[0].text, /MOBILE/);
+});
+
+test("the extended DateRangeType list reaches the API unchanged", async () => {
+  const { calls, tools } = harness(() => `${CAMPAIGN_HEADER}\n1\tC\t1\t1\t1\t1\t1\n`);
+  await tools.get_statistics({ dateRangeType: "LAST_3_DAYS" });
+  assert.equal(calls[0].DateRangeType, "LAST_3_DAYS");
+});

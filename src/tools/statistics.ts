@@ -11,19 +11,51 @@ export const REPORT_TYPES = [
   "AD_PERFORMANCE_REPORT",
   "CRITERIA_PERFORMANCE_REPORT",
   "SEARCH_QUERY_PERFORMANCE_REPORT",
+  // Arbitrary groupings (Device, Age, Gender, Region, Placement, ...) — the most
+  // flexible type; the caller composes fieldNames from dimensions + metrics.
+  "CUSTOM_REPORT",
 ] as const;
 
 type ReportType = (typeof REPORT_TYPES)[number];
 
+/** Full documented DateRangeType list (AUTO = the period Yandex may still restate). */
 const DATE_RANGES = [
   "TODAY",
   "YESTERDAY",
+  "LAST_3_DAYS",
+  "LAST_5_DAYS",
   "LAST_7_DAYS",
+  "LAST_14_DAYS",
   "LAST_30_DAYS",
+  "LAST_90_DAYS",
+  "LAST_365_DAYS",
+  "THIS_WEEK_MON_TODAY",
+  "THIS_WEEK_SUN_TODAY",
+  "LAST_WEEK",
+  "LAST_BUSINESS_WEEK",
+  "LAST_WEEK_SUN_SAT",
   "THIS_MONTH",
   "LAST_MONTH",
   "ALL_TIME",
   "CUSTOM_DATE",
+  "AUTO",
+] as const;
+
+/** Documented attribution models; LC is the API default. */
+const ATTRIBUTION_MODELS = ["FCCD", "LC", "LSCCD", "AUTO"] as const;
+
+/** Documented SelectionCriteria.Filter operators. */
+const FILTER_OPERATORS = [
+  "EQUALS",
+  "NOT_EQUALS",
+  "IN",
+  "NOT_IN",
+  "LESS_THAN",
+  "GREATER_THAN",
+  "STARTS_WITH_IGNORE_CASE",
+  "DOES_NOT_START_WITH_IGNORE_CASE",
+  "STARTS_WITH_ANY_IGNORE_CASE",
+  "DOES_NOT_START_WITH_ALL_IGNORE_CASE",
 ] as const;
 
 const METRICS = ["Impressions", "Clicks", "Cost", "Ctr", "AvgCpc"];
@@ -53,7 +85,18 @@ export const DEFAULT_FIELDS_BY_TYPE: Record<ReportType, string[]> = {
     ...METRICS,
   ],
   SEARCH_QUERY_PERFORMANCE_REPORT: ["CampaignName", "Query", ...METRICS],
+  // No natural default: the whole point of CUSTOM_REPORT is caller-chosen
+  // dimensions. Campaign + metrics is the least surprising starting point.
+  CUSTOM_REPORT: ["CampaignId", "CampaignName", ...METRICS],
 };
+
+/**
+ * Money/conversion columns the Reports service can return but which are NOT in the
+ * defaults, because they are only populated when Metrika goals carry a value.
+ * Listed here so the tool description can name them concretely — Direct has no
+ * ready-made ROAS field, it is computed as Revenue / Cost by the caller.
+ */
+const REVENUE_FIELDS = ["Conversions", "ConversionRate", "CostPerConversion", "Revenue", "Profit", "GoalsRoi"];
 
 export function registerStatisticsTools(server: McpServer, client: YandexDirectClient): void {
   server.registerTool(
@@ -62,7 +105,7 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
       title: "Статистика",
       annotations: READ_ONLY,
       description:
-        "Запрашивает отчёт по эффективности через сервис Reports Яндекс Директа. По умолчанию отчёт АГРЕГИРОВАН за весь период (одна строка на объект) — добавлять \"Date\" в fieldNames только для динамики по дням или вопросов о трендах. ALL_TIME без фильтра по кампаниям отклоняется для отчётов SEARCH_QUERY/CRITERIA: нужно передать campaignIds или ограниченный период. SEARCH_QUERY_PERFORMANCE_REPORT возвращает не сырые строки, а ВЫЧИСЛЕННУЮ СВОДКУ (итоги по ВСЕМ строкам + детализация top-N + свёртка хвоста + количество строк без кликов и без конверсий); её форму задают sortBy/topN/minCost/queryContains/zeroClicksOnly/zeroConversionsOnly, а для подсчётов по конверсиям нужно добавить Conversions в fieldNames. Остальные типы отчётов возвращают строки, разделённые табуляцией (без заголовка).",
+        "Запрашивает отчёт по эффективности через сервис Reports Яндекс Директа. По умолчанию отчёт АГРЕГИРОВАН за весь период (одна строка на объект) — добавлять \"Date\" в fieldNames только для динамики по дням или вопросов о трендах. ПОЧАСОВОЙ статистики в API Директа не существует ни в каком виде: минимальная гранулярность — сутки, внутридневную динамику можно получить только повторными снимками TODAY и вычитанием. Деньги и конверсии: готового ROAS нет, его считают как Revenue / Cost (GoalsRoi — это ROI, не ROAS); Revenue/Conversions заполняются только при подключённой Метрике с ценностью целей, разрез по конкретным целям и моделям атрибуции задают goals/attributionModels. Произвольные разрезы (устройства, пол/возраст, регионы, площадки) — это reportType CUSTOM_REPORT с нужными полями в fieldNames; сложные условия отбора — параметр filters. ALL_TIME без фильтра по кампаниям отклоняется для отчётов SEARCH_QUERY/CRITERIA: нужно передать campaignIds или ограниченный период. SEARCH_QUERY_PERFORMANCE_REPORT возвращает не сырые строки, а ВЫЧИСЛЕННУЮ СВОДКУ (итоги по ВСЕМ строкам + детализация top-N + свёртка хвоста + количество строк без кликов и без конверсий); её форму задают sortBy/topN/minCost/queryContains/zeroClicksOnly/zeroConversionsOnly, а для подсчётов по конверсиям нужно добавить Conversions в fieldNames. Остальные типы отчётов возвращают строки, разделённые табуляцией (без заголовка).",
       inputSchema: {
         reportType: z.enum(REPORT_TYPES).optional().describe("Тип отчёта. По умолчанию CAMPAIGN_PERFORMANCE_REPORT."),
         dateRangeType: z
@@ -71,8 +114,42 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
           .describe("Предустановленный период. Если заданы dateFrom/dateTo, подставляется CUSTOM_DATE."),
         dateFrom: isoDate().optional().describe("Дата начала YYYY-MM-DD (обязательна для CUSTOM_DATE)."),
         dateTo: isoDate().optional().describe("Дата окончания YYYY-MM-DD (обязательна для CUSTOM_DATE)."),
-        fieldNames: z.array(z.string()).optional().describe("Колонки отчёта (должны быть допустимы для его типа)."),
+        fieldNames: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Колонки отчёта (должны быть допустимы для его типа). Кроме базовых метрик доступны " +
+              `${REVENUE_FIELDS.join(", ")} — они заполняются только если в Метрике у целей задана ценность ` +
+              "или передаётся доход. Готового ROAS в API нет: считать Revenue / Cost. GoalsRoi — это ROI, не ROAS. " +
+              "Разрезы для CUSTOM_REPORT: Date, Device, Age, Gender, RegionId/LocationOfPresenceName, " +
+              "Placement, AdNetworkType, Slot и т.д. Почасовой разбивки в API не существует — минимум день.",
+          ),
         campaignIds: z.array(z.number().int()).optional().describe("Ограничить отчёт этими id кампаний."),
+        filters: z
+          .array(
+            z.object({
+              field: z.string().describe("Поле для фильтрации (должно быть допустимо для типа отчёта)."),
+              operator: z.enum(FILTER_OPERATORS).describe("Оператор сравнения."),
+              values: z.array(z.string()).min(1).describe("Значения; числа передавать строками."),
+            }),
+          )
+          .optional()
+          .describe(
+            "Произвольные фильтры SelectionCriteria (складываются с campaignIds по И). " +
+              "Например: отсечь мусорные запросы по Clicks GREATER_THAN 0 или взять один регион.",
+          ),
+        goals: z
+          .array(z.string())
+          .max(10)
+          .optional()
+          .describe(
+            "Id целей Яндекс Метрики (не более 10). Без них конверсии и Revenue приходят агрегированно " +
+              "по всем целям; с ними колонки называются <поле>_<idЦели>_<модель>.",
+          ),
+        attributionModels: z
+          .array(z.enum(ATTRIBUTION_MODELS))
+          .optional()
+          .describe("Модели атрибуции для целей Метрики. По умолчанию LC (последний переход)."),
         includeVat: z.boolean().optional().describe("Включать ли НДС в расход. По умолчанию true."),
         // Aggregation controls — apply to SEARCH_QUERY_PERFORMANCE_REPORT (computed summary).
         sortBy: z
@@ -107,6 +184,9 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
       dateTo,
       fieldNames,
       campaignIds,
+      filters,
+      goals,
+      attributionModels,
       includeVat,
       sortBy,
       order,
@@ -149,15 +229,23 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
           selection.DateFrom = dateFrom;
           selection.DateTo = dateTo;
         }
+        // campaignIds is the convenience shorthand; `filters` carries anything else.
+        // Both land in the same Filter array (the API ANDs them together).
+        const filterList: Record<string, unknown>[] = [];
         if (campaignIds?.length) {
-          selection.Filter = [
-            { Field: "CampaignId", Operator: "IN", Values: campaignIds.map(String) },
-          ];
+          filterList.push({ Field: "CampaignId", Operator: "IN", Values: campaignIds.map(String) });
         }
+        for (const f of filters ?? []) {
+          filterList.push({ Field: f.field, Operator: f.operator, Values: f.values });
+        }
+        if (filterList.length) selection.Filter = filterList;
 
-        const params = {
+        // Kept in a typed local: `params` is Record<string, unknown>, and the
+        // aggregation/truncation helpers below need the concrete string[].
+        const reportFields: string[] = fieldNames?.length ? fieldNames : DEFAULT_FIELDS_BY_TYPE[type];
+        const params: Record<string, unknown> = {
           SelectionCriteria: selection,
-          FieldNames: fieldNames?.length ? fieldNames : DEFAULT_FIELDS_BY_TYPE[type],
+          FieldNames: reportFields,
           ReportName: `mcp-${type}-${Date.now()}`,
           ReportType: type,
           DateRangeType: range,
@@ -165,6 +253,10 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
           IncludeVAT: includeVat === false ? "NO" : "YES",
           IncludeDiscount: "NO",
         };
+        // Goals/AttributionModels sit NEXT TO SelectionCriteria, not inside it.
+        // Omitted → conversions and Revenue arrive aggregated over all goals.
+        if (goals?.length) params.Goals = goals;
+        if (attributionModels?.length) params.AttributionModels = attributionModels;
 
         const tsv = await client.report(params, { login });
         // L2: SEARCH_QUERY is high-cardinality → return a computed summary (totals over
@@ -173,7 +265,7 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
         // note, so it must not be pre-empted by the raw-row guard below.
         if (type === "SEARCH_QUERY_PERFORMANCE_REPORT") {
           return ok(
-            aggregateReport(tsv, params.FieldNames, type, {
+            aggregateReport(tsv, reportFields, type, {
               sortBy,
               order,
               topN,
@@ -191,7 +283,7 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
         // rows (header detection reused from parseRows). Answer with a calm success
         // note (mirroring aggregateReport's empty-slice note): an isError here read
         // as "the request failed, retry", and every retry burns a Reports task + Units.
-        if (campaignIds?.length && countDataRows(tsv, params.FieldNames) === 0) {
+        if (campaignIds?.length && countDataRows(tsv, reportFields) === 0) {
           return ok(
             `0 строк для campaignIds [${campaignIds.join(", ")}] за ${range} — отчёт построился, ` +
               "но показов и расходов в этом срезе нет. Либо кампании не откручивались за период, " +
@@ -203,7 +295,7 @@ export function registerStatisticsTools(server: McpServer, client: YandexDirectC
         // megabytes — cut it EXPLICITLY (loud trailing note) instead of dumping it all
         // into the context. Units and the daily Reports quota are already spent either
         // way; the note steers the model to narrow the request, not to retry.
-        const cut = truncateTsv(tsv, params.FieldNames);
+        const cut = truncateTsv(tsv, reportFields);
         if (cut.truncated) {
           return ok(
             cut.text +
