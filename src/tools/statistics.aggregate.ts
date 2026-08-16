@@ -14,6 +14,10 @@
  * tokenization breaks on Russian morphology — the model groups queries better).
  */
 
+// Revenue belongs here even though it is not in any default field set: it is a MONEY
+// METRIC the caller can request explicitly (ROAS = Revenue / Cost is computed from it).
+// Without it parseRows classified Revenue as a dimension and kept it as a string, so
+// every consumer had to re-parse the cell itself.
 const METRIC_FIELDS = new Set([
   "Impressions",
   "Clicks",
@@ -25,10 +29,11 @@ const METRIC_FIELDS = new Set([
   "CostPerConversion",
   "BounceRate",
   "AvgPageviews",
+  "Revenue",
 ]);
 
 /** Metrics that are summable across rows (ratios like Ctr/AvgCpc are NOT summed). */
-const SUMMABLE = ["Impressions", "Clicks", "Cost", "Conversions"];
+const SUMMABLE = ["Impressions", "Clicks", "Cost", "Conversions", "Revenue"];
 /** Metrics shown in each detail row when present in the report. */
 const DISPLAY_METRICS = [
   "Impressions",
@@ -40,6 +45,7 @@ const DISPLAY_METRICS = [
   "ConversionRate",
   "CostPerConversion",
   "BounceRate",
+  "Revenue",
 ];
 
 export const MAX_TOP_N = 100;
@@ -202,8 +208,8 @@ function sumMetrics(rows: ParsedRow[], keys: string[]): Record<string, number> {
   const t: Record<string, number> = {};
   for (const k of keys) t[k] = 0;
   for (const r of rows) for (const k of keys) t[k] += r.m[k] ?? 0;
-  // Round Cost to 2 decimals to avoid float dust.
-  if ("Cost" in t) t.Cost = Math.round(t.Cost * 100) / 100;
+  // Round money to 2 decimals to avoid float dust.
+  for (const k of ["Cost", "Revenue"]) if (k in t) t[k] = Math.round(t[k] * 100) / 100;
   return t;
 }
 

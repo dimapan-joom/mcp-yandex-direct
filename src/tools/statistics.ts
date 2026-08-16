@@ -18,8 +18,12 @@ export const REPORT_TYPES = [
 
 type ReportType = (typeof REPORT_TYPES)[number];
 
-/** Full documented DateRangeType list (AUTO = the period Yandex may still restate). */
-const DATE_RANGES = [
+/**
+ * Full documented DateRangeType list (AUTO = the period Yandex may still restate).
+ * Exported so the audit tools offer exactly the same periods — a second hand-kept copy
+ * would drift.
+ */
+export const DATE_RANGES = [
   "TODAY",
   "YESTERDAY",
   "LAST_3_DAYS",

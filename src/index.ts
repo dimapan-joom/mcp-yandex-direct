@@ -26,6 +26,7 @@ import { registerRawTool } from "./tools/raw.js";
 import { registerBidModifierTools } from "./tools/bidModifiers.js";
 import { registerAssetTools } from "./tools/assets.js";
 import { registerMediaTools } from "./tools/media.js";
+import { registerAuditTools } from "./tools/audits.js";
 
 /**
  * The prose the calling model receives in the `initialize` result — the only text it
@@ -92,6 +93,7 @@ async function main(): Promise<void> {
   registerBidModifierTools(server, client);
   registerAssetTools(server, client);
   registerMediaTools(server, client);
+  registerAuditTools(server, client);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
