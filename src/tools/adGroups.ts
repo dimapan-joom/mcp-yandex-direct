@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
+import { accountParam, buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
 
 const DEFAULT_FIELDS = ["Id", "Name", "CampaignId", "RegionIds", "Status", "Type"];
 
@@ -23,10 +23,11 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
           .boolean()
           .optional()
           .describe("Забрать все страницы, идя по LimitedBy (limit тогда не ограничивает общий объём)."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ campaignIds, ids, fieldNames, limit, offset, autoPaginate, login }) => {
+    async ({ campaignIds, ids, fieldNames, limit, offset, autoPaginate, account, login }) => {
       try {
         const selection = compact({
           CampaignIds: campaignIds?.length ? campaignIds : undefined,
@@ -39,8 +40,8 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
         const result = autoPaginate
-          ? await client.getAll("adgroups", params, undefined, undefined, login)
-          : await client.call("adgroups", "get", params, login);
+          ? await client.getAll("adgroups", params, undefined, undefined, { account, login })
+          : await client.call("adgroups", "get", params, { account, login });
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -61,13 +62,14 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
           .array(z.number().int())
           .min(1)
           .describe("Id регионов показа, например [225] — Россия."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ name, campaignId, regionIds, login }) => {
+    async ({ name, campaignId, regionIds, account, login }) => {
       try {
         const adGroup = { Name: name, CampaignId: campaignId, RegionIds: regionIds };
-        const result = await client.call("adgroups", "add", { AdGroups: [adGroup] }, login);
+        const result = await client.call("adgroups", "add", { AdGroups: [adGroup] }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -93,10 +95,11 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
           .array(z.string())
           .optional()
           .describe("Заменяет минус-фразы группы; пустой массив очищает их."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ id, name, regionIds, negativeKeywords, login }) => {
+    async ({ id, name, regionIds, negativeKeywords, account, login }) => {
       try {
         const adGroup = compact({
           Id: id,
@@ -107,7 +110,7 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
         if (Object.keys(adGroup).length === 1) {
           return fail("Нужно указать хотя бы одно поле для обновления.");
         }
-        const result = await client.call("adgroups", "update", { AdGroups: [adGroup] }, login);
+        const result = await client.call("adgroups", "update", { AdGroups: [adGroup] }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -124,12 +127,13 @@ export function registerAdGroupTools(server: McpServer, client: YandexDirectClie
         "Удаляет группы объявлений по id (adgroups/delete). Вместе с группой удаляются её объявления и ключевые фразы; отменить это нельзя.",
       inputSchema: {
         ids: z.array(z.number().int()).min(1).describe("Id групп, которые нужно удалить."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ ids, login }) => {
+    async ({ ids, account, login }) => {
       try {
-        const result = await client.call("adgroups", "delete", { SelectionCriteria: { Ids: ids } }, login);
+        const result = await client.call("adgroups", "delete", { SelectionCriteria: { Ids: ids } }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);

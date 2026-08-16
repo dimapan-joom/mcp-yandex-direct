@@ -32,6 +32,34 @@ export type AuthConfig =
       timeoutMs: number;
     };
 
+/**
+ * One configured advertiser account: its own OAuth credentials plus an optional
+ * default Client-Login. Each account in Yandex Direct can be a separate OAuth
+ * application, so credentials are per-account rather than global — the client
+ * keeps one TokenProvider per alias and picks it by the `account` call target.
+ */
+export interface AccountConfig {
+  /** Stable name the caller uses to select this account (lowercased env suffix). */
+  alias: string;
+  auth: AuthConfig;
+  /** Client-Login applied to this account's calls unless the call overrides it. */
+  login?: string;
+  /** Free-text note from config, surfaced by list_accounts to orient the caller. */
+  description?: string;
+}
+
+/** Where a single call is routed: which credentials, and which client account. */
+export interface CallTarget {
+  /** Account alias; omitted → the default account. */
+  account?: string;
+  /**
+   * Client-Login override: a string selects a client of an agency account,
+   * null forces NO header (agencyclients requires this), undefined falls back
+   * to the account's configured login.
+   */
+  login?: string | null;
+}
+
 export interface ApiError {
   error_code: number;
   error_string: string;

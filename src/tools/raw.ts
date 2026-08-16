@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { fail, isReadMethod, loginParam, okOrPartial, WRITE_DELETE } from "./util.js";
+import { accountParam, fail, isReadMethod, loginParam, okOrPartial, WRITE_DELETE } from "./util.js";
 
 // isReadMethod now lives in util.ts (shared with the client's retry-idempotency
 // check); re-exported here so existing importers/tests keep resolving it.
@@ -32,17 +32,18 @@ export function registerRawTool(server: McpServer, client: YandexDirectClient): 
           .boolean()
           .optional()
           .describe("Должен быть true для запуска метода записи (всё, кроме get/has/check)."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ service, method, params, confirmWrite, login }) => {
+    async ({ service, method, params, confirmWrite, account, login }) => {
       try {
         if (!isReadMethod(method) && confirmWrite !== true) {
           return fail(
             `"${method}" в "${service}" — операция записи. Чтобы выполнить её, повторить вызов с confirmWrite=true.`,
           );
         }
-        const result = await client.call(service, method, params ?? {}, login);
+        const result = await client.call(service, method, params ?? {}, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);

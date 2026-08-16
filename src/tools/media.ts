@@ -3,7 +3,7 @@ import { isIP } from "node:net";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { buildPage, fail, loginParam, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE } from "./util.js";
+import { accountParam, buildPage, fail, loginParam, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE } from "./util.js";
 
 /** Yandex accepts ad images up to 10 MB — reject anything larger before encoding. */
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -23,10 +23,11 @@ export function registerMediaTools(server: McpServer, client: YandexDirectClient
         hashes: z.array(z.string()).optional().describe("Фильтр по хешам изображений."),
         limit: z.number().int().min(1).max(MAX_TOOL_LIMIT).optional().describe("Максимум объектов на страницу."),
         offset: z.number().int().min(0).optional().describe("Смещение постраничной выдачи."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ hashes, limit, offset, login }) => {
+    async ({ hashes, limit, offset, account, login }) => {
       try {
         const params: Record<string, unknown> = {
           SelectionCriteria: hashes?.length ? { AdImageHashes: hashes } : {},
@@ -34,7 +35,7 @@ export function registerMediaTools(server: McpServer, client: YandexDirectClient
         };
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
-        const result = await client.call("adimages", "get", params, login);
+        const result = await client.call("adimages", "get", params, { account, login });
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -53,10 +54,11 @@ export function registerMediaTools(server: McpServer, client: YandexDirectClient
         ids: z.array(z.number().int()).min(1).describe("Id видео (обязательны по требованию API)."),
         limit: z.number().int().min(1).max(MAX_TOOL_LIMIT).optional().describe("Максимум объектов на страницу."),
         offset: z.number().int().min(0).optional().describe("Смещение постраничной выдачи."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ ids, limit, offset, login }) => {
+    async ({ ids, limit, offset, account, login }) => {
       try {
         const params: Record<string, unknown> = {
           SelectionCriteria: { Ids: ids },
@@ -64,7 +66,7 @@ export function registerMediaTools(server: McpServer, client: YandexDirectClient
         };
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
-        const result = await client.call("advideos", "get", params, login);
+        const result = await client.call("advideos", "get", params, { account, login });
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -82,10 +84,11 @@ export function registerMediaTools(server: McpServer, client: YandexDirectClient
         ids: z.array(z.number().int()).optional().describe("Фильтр по id креативов."),
         limit: z.number().int().min(1).max(MAX_TOOL_LIMIT).optional().describe("Максимум объектов на страницу."),
         offset: z.number().int().min(0).optional().describe("Смещение постраничной выдачи."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ ids, limit, offset, login }) => {
+    async ({ ids, limit, offset, account, login }) => {
       try {
         const params: Record<string, unknown> = {
           SelectionCriteria: ids?.length ? { Ids: ids } : {},
@@ -93,7 +96,7 @@ export function registerMediaTools(server: McpServer, client: YandexDirectClient
         };
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
-        const result = await client.call("creatives", "get", params, login);
+        const result = await client.call("creatives", "get", params, { account, login });
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -120,10 +123,11 @@ export function registerMediaTools(server: McpServer, client: YandexDirectClient
           .min(1)
           .optional()
           .describe("Байты изображения в base64 (префикс data:-URL отбрасывается). Нужно передать это поле или url."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ name, url, imageData, login }) => {
+    async ({ name, url, imageData, account, login }) => {
       try {
         if (!url && !imageData) {
           return fail(new Error("Нужно передать url или imageData."));
@@ -131,7 +135,7 @@ export function registerMediaTools(server: McpServer, client: YandexDirectClient
         const data = imageData ? stripDataUrlPrefix(imageData) : await fetchImageBase64(url as string);
         const result = await client.call("adimages", "add", {
           AdImages: [{ Name: name, ImageData: data }],
-        }, login);
+        }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);

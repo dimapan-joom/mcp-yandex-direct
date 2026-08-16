@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, ok, READ_ONLY } from "./util.js";
+import { accountParam, buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, ok, READ_ONLY } from "./util.js";
 
 const DEFAULT_FIELDS = [
   "Login",
@@ -28,16 +28,17 @@ export function registerAccountTools(server: McpServer, client: YandexDirectClie
           .array(z.string())
           .optional()
           .describe("Какие поля клиента вернуть. По умолчанию — типовой набор."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ fieldNames, login }) => {
+    async ({ fieldNames, account, login }) => {
       try {
         const result = await client.call(
           "clients",
           "get",
           { FieldNames: fieldNames?.length ? fieldNames : DEFAULT_FIELDS },
-          login,
+          { account, login },
         );
         return ok(result);
       } catch (e) {
@@ -58,15 +59,22 @@ export function registerAccountTools(server: McpServer, client: YandexDirectClie
           .array(z.string())
           .optional()
           .describe("Логины аккаунтов, по которым нужны данные. По умолчанию — собственный аккаунт токена."),
+        account: accountParam(),
       },
     },
-    async ({ logins }) => {
+    async ({ logins, account }) => {
       try {
         // Money in Live v4 is already in currency units — do NOT normalizeMoney it.
-        const result = await client.callV4("AccountManagement", {
-          Action: "Get",
-          SelectionCriteria: logins?.length ? { Logins: logins } : {},
-        });
+        // v4 has no Client-Login header: the accounts are selected by SelectionCriteria.Logins,
+        // so only `account` (which credential set to use) is routed here.
+        const result = await client.callV4(
+          "AccountManagement",
+          {
+            Action: "Get",
+            SelectionCriteria: logins?.length ? { Logins: logins } : {},
+          },
+          { account },
+        );
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -82,12 +90,13 @@ export function registerAccountTools(server: McpServer, client: YandexDirectClie
       description:
         "Возвращает сегодняшнюю квоту баллов API (потрачено / осталось / лимит) из заголовка Units — чтобы не упереться в дневной лимит.",
       inputSchema: {
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ login }) => {
+    async ({ account, login }) => {
       try {
-        await client.call("clients", "get", { FieldNames: ["Login"] }, login);
+        await client.call("clients", "get", { FieldNames: ["Login"] }, { account, login });
         const units = client.units;
         return ok(units ?? "API не вернул квоту Units.");
       } catch (e) {
@@ -113,9 +122,10 @@ export function registerAccountTools(server: McpServer, client: YandexDirectClie
         fieldNames: z.array(z.string()).optional().describe("Какие поля клиента вернуть. По умолчанию — типовой набор."),
         limit: z.number().int().min(1).max(MAX_TOOL_LIMIT).optional().describe("Максимум объектов на страницу."),
         offset: z.number().int().min(0).optional().describe("Смещение постраничной выдачи (сколько объектов пропустить)."),
+        account: accountParam(),
       },
     },
-    async ({ logins, archived, fieldNames, limit, offset }) => {
+    async ({ logins, archived, fieldNames, limit, offset, account }) => {
       try {
         const selection = compact({
           Logins: logins?.length ? logins : undefined,
@@ -128,7 +138,7 @@ export function registerAccountTools(server: McpServer, client: YandexDirectClie
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
         // agencyclients требует запрос БЕЗ заголовка Client-Login, поэтому login = null («явно без заголовка»).
-        const result = await client.call("agencyclients", "get", params, null);
+        const result = await client.call("agencyclients", "get", params, { account, login: null });
         return ok(result);
       } catch (e) {
         return fail(e);

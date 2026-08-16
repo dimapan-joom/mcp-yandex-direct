@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, normalizeMoney, ok, okOrPartial, READ_ONLY, toMicros, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
+import { accountParam, buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, normalizeMoney, ok, okOrPartial, READ_ONLY, toMicros, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
 
 const DEFAULT_FIELDS = ["Id", "Keyword", "AdGroupId", "CampaignId", "Bid", "ContextBid", "State", "Status"];
 
@@ -24,10 +24,11 @@ export function registerKeywordTools(server: McpServer, client: YandexDirectClie
           .boolean()
           .optional()
           .describe("Забрать все страницы, идя по LimitedBy (limit тогда не ограничивает общий объём)."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ campaignIds, adGroupIds, ids, fieldNames, limit, offset, autoPaginate, login }) => {
+    async ({ campaignIds, adGroupIds, ids, fieldNames, limit, offset, autoPaginate, account, login }) => {
       try {
         const selection = compact({
           CampaignIds: campaignIds?.length ? campaignIds : undefined,
@@ -41,8 +42,8 @@ export function registerKeywordTools(server: McpServer, client: YandexDirectClie
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
         const result = autoPaginate
-          ? await client.getAll("keywords", params, undefined, undefined, login)
-          : await client.call("keywords", "get", params, login);
+          ? await client.getAll("keywords", params, undefined, undefined, { account, login })
+          : await client.call("keywords", "get", params, { account, login });
         return ok(normalizeMoney(result));
       } catch (e) {
         return fail(e);
@@ -68,10 +69,11 @@ export function registerKeywordTools(server: McpServer, client: YandexDirectClie
           )
           .min(1)
           .describe("Ключевые фразы для добавления."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ adGroupId, keywords, login }) => {
+    async ({ adGroupId, keywords, account, login }) => {
       try {
         const payload = keywords.map((k) =>
           compact({
@@ -81,7 +83,7 @@ export function registerKeywordTools(server: McpServer, client: YandexDirectClie
             ContextBid: k.contextBid !== undefined ? toMicros(k.contextBid) : undefined,
           }),
         );
-        const result = await client.call("keywords", "add", { Keywords: payload }, login);
+        const result = await client.call("keywords", "add", { Keywords: payload }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -98,12 +100,13 @@ export function registerKeywordTools(server: McpServer, client: YandexDirectClie
       inputSchema: {
         action: z.enum(["suspend", "resume", "delete"]),
         ids: z.array(z.number().int()).min(1).describe("Id ключевых фраз, к которым применить действие."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ action, ids, login }) => {
+    async ({ action, ids, account, login }) => {
       try {
-        const result = await client.call("keywords", action, { SelectionCriteria: { Ids: ids } }, login);
+        const result = await client.call("keywords", action, { SelectionCriteria: { Ids: ids } }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -131,10 +134,11 @@ export function registerKeywordTools(server: McpServer, client: YandexDirectClie
           )
           .min(1)
           .describe("В каждом элементе нужен один целевой id и хотя бы одно из полей bid/contextBid."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ bids, login }) => {
+    async ({ bids, account, login }) => {
       try {
         for (const b of bids) {
           if (b.keywordId === undefined && b.adGroupId === undefined && b.campaignId === undefined) {
@@ -153,7 +157,7 @@ export function registerKeywordTools(server: McpServer, client: YandexDirectClie
             ContextBid: b.contextBid !== undefined ? toMicros(b.contextBid) : undefined,
           }),
         );
-        const result = await client.call("keywordbids", "set", { KeywordBids }, login);
+        const result = await client.call("keywordbids", "set", { KeywordBids }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);

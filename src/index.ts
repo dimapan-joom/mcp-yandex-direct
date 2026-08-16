@@ -16,6 +16,7 @@ function readVersion(): string {
   }
 }
 import { registerAccountTools } from "./tools/account.js";
+import { registerAccountsTool } from "./tools/accounts.js";
 import { registerCampaignTools } from "./tools/campaigns.js";
 import { registerAdGroupTools } from "./tools/adGroups.js";
 import { registerAdTools } from "./tools/ads.js";
@@ -45,10 +46,13 @@ const INSTRUCTIONS =
   "get_quota), " +
   "а get_statistics запускает асинхронную задачу в сервисе Reports со своими дневными лимитами — " +
   "запрашивать один широкий период, а не цикл по дням или кампаниям. Деньги везде в валюте " +
-  "аккаунта, кроме raw_request, где они в микроединицах. Агентский токен обслуживает несколько " +
-  "клиентских аккаунтов: их логины отдаёт list_agency_clients, и КАЖДЫЙ вызов должен явно " +
+  "аккаунта, кроме raw_request, где они в микроединицах. Сервер обслуживает несколько рекламных " +
+  "аккаунтов, и у КАЖДОГО свои ключи доступа: список алиасов отдаёт list_accounts (локально, без " +
+  "запроса в API), параметр account выбирает аккаунт в каждом вызове, без него запрос уходит в " +
+  "аккаунт по умолчанию. Внутри одного аккаунта агентский токен обслуживает несколько " +
+  "клиентских логинов: их отдаёт list_agency_clients, и КАЖДЫЙ вызов должен явно " +
   "передавать параметр login — без него запрос уходит в аккаунт из YANDEX_DIRECT_LOGIN или в " +
-  "собственный аккаунт агентства, поэтому пустой список сперва проверить на правильный login; " +
+  "собственный аккаунт агентства, поэтому пустой список сперва проверить на правильные account и login; " +
   "фильтр по типам без UNIFIED_CAMPAIGN скрывает актуальные " +
   "перформанс-кампании. Запись тратит реальные деньги, если не задан YANDEX_DIRECT_SANDBOX=true, " +
   "удаление необратимо, а частично неудачный пакет всё равно возвращает HTTP 200 — читать ошибки " +
@@ -70,8 +74,16 @@ function loadConfigOrExit(): LoadedConfig {
 }
 
 async function main(): Promise<void> {
-  const { config, auth } = loadConfigOrExit();
-  const client = new YandexDirectClient(config, createTokenProvider(auth));
+  const { config, accounts, defaultAccount } = loadConfigOrExit();
+  // One provider per account: each account is its own OAuth application, so its
+  // credentials must never be reused for another alias. The single-provider slot is
+  // left empty — routing goes through this registry.
+  const providers = accounts.map((a) => ({
+    alias: a.alias,
+    provider: createTokenProvider(a.auth),
+    login: a.login,
+  }));
+  const client = new YandexDirectClient(config, undefined, providers, defaultAccount);
 
   const server = new McpServer(
     {
@@ -82,6 +94,7 @@ async function main(): Promise<void> {
     { instructions: INSTRUCTIONS },
   );
 
+  registerAccountsTool(server, client);
   registerAccountTools(server, client);
   registerCampaignTools(server, client);
   registerAdGroupTools(server, client);

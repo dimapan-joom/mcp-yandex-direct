@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
+import { accountParam, buildPage, compact, fail, loginParam, MAX_TOOL_LIMIT, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
 
 const AD_STATES = ["ON", "OFF", "SUSPENDED", "OFF_BY_MONITORING", "ARCHIVED"] as const;
 const AD_STATUSES = ["ACCEPTED", "DRAFT", "MODERATION", "PREACCEPTED", "REJECTED"] as const;
@@ -28,10 +28,11 @@ export function registerAdTools(server: McpServer, client: YandexDirectClient): 
           .boolean()
           .optional()
           .describe("Забрать все страницы, идя по LimitedBy (limit тогда не ограничивает общий объём)."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ campaignIds, adGroupIds, ids, states, statuses, fieldNames, limit, offset, autoPaginate, login }) => {
+    async ({ campaignIds, adGroupIds, ids, states, statuses, fieldNames, limit, offset, autoPaginate, account, login }) => {
       try {
         const selection = compact({
           CampaignIds: campaignIds?.length ? campaignIds : undefined,
@@ -47,8 +48,8 @@ export function registerAdTools(server: McpServer, client: YandexDirectClient): 
         const page = buildPage(limit, offset);
         if (page) params.Page = page;
         const result = autoPaginate
-          ? await client.getAll("ads", params, undefined, undefined, login)
-          : await client.call("ads", "get", params, login);
+          ? await client.getAll("ads", params, undefined, undefined, { account, login })
+          : await client.call("ads", "get", params, { account, login });
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -75,10 +76,11 @@ export function registerAdTools(server: McpServer, client: YandexDirectClient): 
           .boolean()
           .default(false)
           .describe("Мобильное ли это объявление. Поле в API устарело (значение принудительно NO), но остаётся обязательным."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ adGroupId, title, title2, text, href, mobile, login }) => {
+    async ({ adGroupId, title, title2, text, href, mobile, account, login }) => {
       try {
         const textAd = compact({
           Title: title,
@@ -91,7 +93,7 @@ export function registerAdTools(server: McpServer, client: YandexDirectClient): 
           Mobile: mobile ? "YES" : "NO",
         });
         const ad = { AdGroupId: adGroupId, TextAd: textAd };
-        const result = await client.call("ads", "add", { Ads: [ad] }, login);
+        const result = await client.call("ads", "add", { Ads: [ad] }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -109,12 +111,13 @@ export function registerAdTools(server: McpServer, client: YandexDirectClient): 
       inputSchema: {
         action: z.enum(["moderate", "suspend", "resume", "archive", "unarchive", "delete"]),
         ids: z.array(z.number().int()).min(1).describe("Id объявлений, к которым применить действие."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ action, ids, login }) => {
+    async ({ action, ids, account, login }) => {
       try {
-        const result = await client.call("ads", action, { SelectionCriteria: { Ids: ids } }, login);
+        const result = await client.call("ads", action, { SelectionCriteria: { Ids: ids } }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -135,16 +138,17 @@ export function registerAdTools(server: McpServer, client: YandexDirectClient): 
         title2: z.string().max(30).optional().describe("Новый второй заголовок (Title 2), до 30 символов."),
         text: z.string().min(1).max(81).optional().describe("Новый текст объявления, до 81 символа."),
         href: z.string().optional().describe("Новый URL посадочной страницы."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ id, title, title2, text, href, login }) => {
+    async ({ id, title, title2, text, href, account, login }) => {
       try {
         const textAd = compact({ Title: title, Title2: title2, Text: text, Href: href });
         if (Object.keys(textAd).length === 0) {
           return fail("Нужно указать хотя бы одно поле для обновления.");
         }
-        const result = await client.call("ads", "update", { Ads: [{ Id: id, TextAd: textAd }] }, login);
+        const result = await client.call("ads", "update", { Ads: [{ Id: id, TextAd: textAd }] }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);

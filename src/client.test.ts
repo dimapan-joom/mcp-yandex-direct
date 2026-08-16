@@ -633,7 +633,7 @@ test("YandexDirectError appends request_id to the message when present", () => {
 
 // --- re-auth: one fresh-token retry on 401 / error code 53 -------------------
 
-import type { TokenProvider } from "./auth/tokenProvider.js";
+import { staticToken, type TokenProvider } from "./auth/tokenProvider.js";
 
 /** A provider whose tokens change on every invalidate — the refreshing shape. */
 function rotatingProvider(tokens: string[]): TokenProvider & { invalidations: string[] } {
@@ -786,7 +786,7 @@ test("call() login override wins over the configured login", async () => {
   const mock = mockFetch(() => new Response(JSON.stringify({ result: {} }), { status: 200 }));
   try {
     const client = new YandexDirectClient({ token: "T", login: "default-login", ...BASE_CONFIG });
-    await client.call("campaigns", "get", {}, "client-a");
+    await client.call("campaigns", "get", {}, { login: "client-a" });
     await client.call("campaigns", "get", {});
     const h0 = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
     const h1 = (mock.calls[1].init.headers ?? {}) as Record<string, string>;
@@ -801,7 +801,7 @@ test("call() login:null strips the Client-Login header entirely (agencyclients)"
   const mock = mockFetch(() => new Response(JSON.stringify({ result: {} }), { status: 200 }));
   try {
     const client = new YandexDirectClient({ token: "T", login: "default-login", ...BASE_CONFIG });
-    await client.call("agencyclients", "get", {}, null);
+    await client.call("agencyclients", "get", {}, { login: null });
     const headers = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
     assert.equal(headers["Client-Login"], undefined);
   } finally {
@@ -821,7 +821,7 @@ test("getAll() forwards the login override to every page", async () => {
   });
   try {
     const client = new YandexDirectClient({ token: "T", ...BASE_CONFIG });
-    await client.getAll("campaigns", {}, undefined, undefined, "client-b");
+    await client.getAll("campaigns", {}, undefined, undefined, { login: "client-b" });
     assert.equal(mock.calls.length, 2);
     for (const call of mock.calls) {
       const headers = (call.init.headers ?? {}) as Record<string, string>;
@@ -839,6 +839,145 @@ test("report() forwards opts.login", async () => {
     await client.report({ ReportName: "r" }, { login: "client-c" });
     const headers = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
     assert.equal(headers["Client-Login"], "client-c");
+  } finally {
+    mock.restore();
+  }
+});
+
+// --- per-account credentials -------------------------------------------------
+
+/** A client wired with two accounts, each with its own static token. */
+function twoAccountClient() {
+  return new YandexDirectClient(
+    { ...BASE_CONFIG },
+    undefined,
+    [
+      { alias: "joom", provider: staticToken("token-joom"), login: "joom-login" },
+      { alias: "ayzeze", provider: staticToken("token-ayzeze") },
+    ],
+    "joom",
+  );
+}
+
+test("account selects that account's credentials, not the default's", async () => {
+  const mock = mockFetch(() => new Response(JSON.stringify({ result: {} }), { status: 200 }));
+  try {
+    const client = twoAccountClient();
+    await client.call("campaigns", "get", {}, { account: "ayzeze" });
+    const headers = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
+    // Signing with the wrong account's token would read a foreign advertiser.
+    assert.equal(headers.Authorization, "Bearer token-ayzeze");
+    assert.equal(headers["Client-Login"], undefined, "ayzeze has no configured login");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("omitting account uses the default account and its login", async () => {
+  const mock = mockFetch(() => new Response(JSON.stringify({ result: {} }), { status: 200 }));
+  try {
+    const client = twoAccountClient();
+    await client.call("campaigns", "get", {});
+    const headers = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
+    assert.equal(headers.Authorization, "Bearer token-joom");
+    assert.equal(headers["Client-Login"], "joom-login");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("an unknown account is a hard error, never a silent fall-back", async () => {
+  const mock = mockFetch(() => new Response(JSON.stringify({ result: {} }), { status: 200 }));
+  try {
+    const client = twoAccountClient();
+    await assert.rejects(
+      () => client.call("campaigns", "get", {}, { account: "typo" }),
+      /Неизвестный аккаунт "typo"/,
+    );
+    assert.equal(mock.calls.length, 0, "nothing may reach the API with unresolved credentials");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("account aliases are case-insensitive", async () => {
+  const mock = mockFetch(() => new Response(JSON.stringify({ result: {} }), { status: 200 }));
+  try {
+    const client = twoAccountClient();
+    await client.call("campaigns", "get", {}, { account: "AyZeZe" });
+    const headers = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
+    assert.equal(headers.Authorization, "Bearer token-ayzeze");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("login override still applies on top of a chosen account", async () => {
+  const mock = mockFetch(() => new Response(JSON.stringify({ result: {} }), { status: 200 }));
+  try {
+    const client = twoAccountClient();
+    await client.call("campaigns", "get", {}, { account: "joom", login: "sub-client" });
+    const headers = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
+    assert.equal(headers.Authorization, "Bearer token-joom");
+    assert.equal(headers["Client-Login"], "sub-client");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("callV4 signs with the selected account's token", async () => {
+  const mock = mockFetch(() => new Response(JSON.stringify({ data: {} }), { status: 200 }));
+  try {
+    const client = twoAccountClient();
+    await client.callV4("AccountManagement", { Action: "Get" }, { account: "ayzeze" });
+    const body = JSON.parse(String(mock.calls[0].init.body)) as { token?: string };
+    assert.equal(body.token, "token-ayzeze");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("report() routes to the selected account", async () => {
+  const mock = mockFetch(() => new Response("Date\tCost", { status: 200 }));
+  try {
+    const client = twoAccountClient();
+    await client.report({ ReportName: "r" }, { account: "ayzeze" });
+    const headers = (mock.calls[0].init.headers ?? {}) as Record<string, string>;
+    assert.equal(headers.Authorization, "Bearer token-ayzeze");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("each account re-auths with its OWN provider", async () => {
+  // A 401 on account B must invalidate B's token, never the default account's.
+  let ayzezeInvalidations = 0;
+  const ayzeze: TokenProvider = {
+    kind: "refreshing",
+    getToken: async () => "token-ayzeze",
+    invalidate: () => {
+      ayzezeInvalidations++;
+      return true;
+    },
+  };
+  let calls = 0;
+  const mock = mockFetch(() => {
+    calls++;
+    return new Response("unauthorized", { status: 401 });
+  });
+  try {
+    const client = new YandexDirectClient(
+      { ...BASE_CONFIG },
+      undefined,
+      [
+        { alias: "joom", provider: staticToken("token-joom") },
+        { alias: "ayzeze", provider: ayzeze },
+      ],
+      "joom",
+    );
+    await assert.rejects(() => client.call("campaigns", "get", {}, { account: "ayzeze" }));
+    assert.equal(ayzezeInvalidations, 1, "only the targeted account's provider is invalidated");
+    assert.equal(calls, 2, "one original + one re-auth retry");
   } finally {
     mock.restore();
   }

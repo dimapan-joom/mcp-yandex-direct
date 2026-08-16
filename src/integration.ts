@@ -27,13 +27,20 @@ function firstError(result?: ObjectResult): string {
 }
 
 async function main(): Promise<void> {
-  const { config, auth } = loadConfig();
+  const { config, accounts, defaultAccount } = loadConfig();
   if (!config.sandbox) {
     console.error("Refusing to run: integration writes require the sandbox (set YANDEX_DIRECT_SANDBOX=true).");
     process.exit(1);
   }
-  const client = new YandexDirectClient(config, createTokenProvider(auth));
-  console.log("Yandex Direct sandbox integration check\n");
+  // One provider per configured account — each account has its own credentials.
+  // The write round-trip below names no account, so it runs against `defaultAccount`.
+  const providers = accounts.map((a) => ({
+    alias: a.alias,
+    provider: createTokenProvider(a.auth),
+    login: a.login,
+  }));
+  const client = new YandexDirectClient(config, undefined, providers, defaultAccount);
+  console.log(`Yandex Direct sandbox integration check (аккаунт «${defaultAccount}»)\n`);
 
   // 1. Read: account info (also carries the Units quota header).
   const account = await client.call<{ Clients?: { Login?: string; Currency?: string }[] }>(

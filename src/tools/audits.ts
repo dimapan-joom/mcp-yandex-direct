@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
 import { MAX_TOP_N, parseRows } from "./statistics.aggregate.js";
 import { DATE_RANGES } from "./statistics.js";
-import { compact, fail, isoDate, loginParam, normalizeMoney, ok, READ_ONLY } from "./util.js";
+import { accountParam, compact, fail, isoDate, loginParam, normalizeMoney, ok, READ_ONLY } from "./util.js";
 import {
   buildHealthReport,
   CAMPAIGN_AUDIT_FIELDS,
@@ -69,10 +69,11 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
           .max(MAX_TOP_N)
           .optional()
           .describe(`Сколько примеров объектов показывать в каждой секции. По умолчанию ${DEFAULT_EXAMPLES}.`),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ campaignIds, maxExamples, login }) => {
+    async ({ campaignIds, maxExamples, account, login }) => {
       try {
         const limit = maxExamples ?? DEFAULT_EXAMPLES;
         // campaigns/get is the backbone of the report: if it fails there is nothing to
@@ -84,7 +85,7 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
             SelectionCriteria: compact({ Ids: campaignIds?.length ? campaignIds : undefined }),
             FieldNames: CAMPAIGN_AUDIT_FIELDS,
           },
-          login,
+          { account, login },
         );
         const campaigns = normalizeMoney(campaignsResult).Campaigns ?? [];
 
@@ -104,7 +105,7 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
               FieldNames: REJECTED_AD_FIELDS,
               Page: { Limit: REJECTED_ADS_PAGE_LIMIT, Offset: 0 },
             },
-            login,
+            { account, login },
           );
           rejectedAds = adsResult.Ads ?? [];
         } catch (e) {
@@ -115,10 +116,15 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
         let fundsError: string | undefined;
         try {
           // Live v4 has no Client-Login header — the account is selected via Logins.
-          const v4 = await client.callV4<{ Accounts?: AuditAccountFunds[] }>("AccountManagement", {
-            Action: "Get",
-            SelectionCriteria: login ? { Logins: [login] } : {},
-          });
+          // `account` still routes it, because it picks WHICH credentials sign the call.
+          const v4 = await client.callV4<{ Accounts?: AuditAccountFunds[] }>(
+            "AccountManagement",
+            {
+              Action: "Get",
+              SelectionCriteria: login ? { Logins: [login] } : {},
+            },
+            { account },
+          );
           funds = v4.Accounts ?? [];
         } catch (e) {
           fundsError = e instanceof Error ? e.message : String(e);
@@ -147,10 +153,11 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
           .optional()
           .describe("Период отчёта. По умолчанию LAST_30_DAYS."),
         topN: topNSchema(DEFAULT_TOP_N),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ dateRangeType, dateFrom, dateTo, campaignIds, topN, login }) => {
+    async ({ dateRangeType, dateFrom, dateTo, campaignIds, topN, account, login }) => {
       try {
         const period = resolvePeriod(dateRangeType, dateFrom, dateTo, "LAST_30_DAYS");
         if (period.range === "ALL_TIME" && !campaignIds?.length) {
@@ -159,7 +166,7 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
           );
         }
         const params = reportParams("SEARCH_QUERY_PERFORMANCE_REPORT", SEARCH_TERM_FIELDS, period, campaignIds);
-        const tsv = await client.report(params, { login });
+        const tsv = await client.report(params, { account, login });
         const rows = parseRows(tsv, SEARCH_TERM_FIELDS);
         return ok(computeSearchTermAudit(rows, { topN: topN ?? DEFAULT_TOP_N, period: describePeriod(period) }));
       } catch (e) {
@@ -182,10 +189,11 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
           .optional()
           .describe("Период отчёта. По умолчанию LAST_7_DAYS."),
         topN: topNSchema(DEFAULT_CAMPAIGN_TOP_N),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ dateRangeType, dateFrom, dateTo, campaignIds, topN, login }) => {
+    async ({ dateRangeType, dateFrom, dateTo, campaignIds, topN, account, login }) => {
       try {
         const period = resolvePeriod(dateRangeType, dateFrom, dateTo, "LAST_7_DAYS");
         const campaignsResult = await client.call<{ Campaigns?: AuditCampaign[] }>(
@@ -195,12 +203,12 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
             SelectionCriteria: compact({ Ids: campaignIds?.length ? campaignIds : undefined }),
             FieldNames: ["Id", "Name", "State", "Status", "DailyBudget"],
           },
-          login,
+          { account, login },
         );
         const campaigns = normalizeMoney(campaignsResult).Campaigns ?? [];
         const tsv = await client.report(
           reportParams("CAMPAIGN_PERFORMANCE_REPORT", PACING_FIELDS, period, campaignIds),
-          { login },
+          { account, login },
         );
         const rows = parseRows(tsv, PACING_FIELDS);
         return ok(
@@ -236,15 +244,16 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
             "Порог ROAS как ОТНОШЕНИЕ Revenue / Cost (например 3 = выручка втрое больше расхода), не проценты. Кампании ниже порога попадут в findings. Работает только если выручка реально передаётся.",
           ),
         topN: topNSchema(DEFAULT_CAMPAIGN_TOP_N),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ dateRangeType, dateFrom, dateTo, campaignIds, minRoas, topN, login }) => {
+    async ({ dateRangeType, dateFrom, dateTo, campaignIds, minRoas, topN, account, login }) => {
       try {
         const period = resolvePeriod(dateRangeType, dateFrom, dateTo, "LAST_30_DAYS");
         const tsv = await client.report(
           reportParams("CAMPAIGN_PERFORMANCE_REPORT", EFFICIENCY_FIELDS, period, campaignIds),
-          { login },
+          { account, login },
         );
         const rows = parseRows(tsv, EFFICIENCY_FIELDS);
         return ok(

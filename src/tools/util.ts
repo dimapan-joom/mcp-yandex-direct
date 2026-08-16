@@ -30,6 +30,25 @@ export const loginParam = () =>
         "или в собственный аккаунт владельца токена. Список логинов — list_agency_clients.",
     );
 
+/**
+ * The per-call CREDENTIAL selector. Orthogonal to loginParam: `login` picks which
+ * client of ONE account a call addresses, `account` picks WHICH CREDENTIALS sign it —
+ * every configured account is its own OAuth application with its own keys, so routing
+ * a call to the wrong alias would sign it with a foreign advertiser's token. Omitted →
+ * the default account. A factory for the same $ref-dedupe reason as isoDate.
+ */
+export const accountParam = () =>
+  z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Алиас рекламного аккаунта для этого вызова: у каждого аккаунта свои ключи доступа " +
+        "(отдельное OAuth-приложение), поэтому алиас выбирает, какими учётными данными будет " +
+        "подписан запрос. Список доступных алиасов отдаёт инструмент list_accounts. " +
+        "Без параметра вызов уходит в аккаунт по умолчанию из YANDEX_DEFAULT_ACCOUNT.",
+    );
+
 export function ok(data: unknown): CallToolResult {
   // Compact JSON (no indent): the consumer is an LLM, pretty-printing only burns tokens.
   // `JSON.stringify(undefined)` is `undefined` (not a string) — guard it so we never emit

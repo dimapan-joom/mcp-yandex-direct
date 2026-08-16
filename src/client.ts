@@ -1,4 +1,4 @@
-import type { ApiError, YandexDirectConfig } from "./types.js";
+import type { ApiError, CallTarget, YandexDirectConfig } from "./types.js";
 import { YandexDirectError } from "./types.js";
 import { staticToken, type TokenProvider } from "./auth/tokenProvider.js";
 import { DEFAULT_PAGE_LIMIT, isReadMethod } from "./tools/util.js";
@@ -12,12 +12,10 @@ const SANDBOX_BASE = "https://api-sandbox.direct.yandex.com/json/v5/";
 const PROD_V4_BASE = "https://api.direct.yandex.ru/live/v4/json/";
 const SANDBOX_V4_BASE = "https://api-sandbox.direct.yandex.ru/live/v4/json/";
 
-export interface ReportOptions {
+export interface ReportOptions extends CallTarget {
   processingMode?: "auto" | "online" | "offline";
   returnMoneyInMicros?: boolean;
   maxPolls?: number;
-  /** Client-Login override for this report; undefined → configured login. */
-  login?: string | null;
 }
 
 /** API error codes that are transient and worth retrying: 52 = try again later, 506 = request rate exceeded. */
@@ -49,12 +47,25 @@ export class YandexDirectClient {
   private readonly retryBaseMs: number;
   private latestUnits?: Units;
 
+  /** One token provider per account alias — each account is its own OAuth app. */
+  private readonly providers: Map<string, TokenProvider>;
+  /** Per-account default Client-Login, by alias. */
+  private readonly accountLogins: Map<string, string | undefined>;
+  private readonly defaultAccount: string;
+
   constructor(
     private readonly config: YandexDirectConfig,
     // Defaulting to a static provider keeps every existing `new YandexDirectClient({token})`
-    // call site (tests included) working unchanged; index.ts passes the real provider.
+    // call site (tests included) working unchanged; index.ts passes the real registry.
     private readonly tokens: TokenProvider = staticToken(config.token ?? ""),
+    accounts?: { alias: string; provider: TokenProvider; login?: string }[],
+    defaultAccount?: string,
   ) {
+    this.providers = new Map((accounts ?? []).map((a) => [a.alias, a.provider]));
+    this.accountLogins = new Map((accounts ?? []).map((a) => [a.alias, a.login]));
+    this.defaultAccount = defaultAccount ?? accounts?.[0]?.alias ?? "default";
+    // Single-provider construction (tests, smoke) still resolves to `tokens`.
+    if (this.providers.size === 0) this.providers.set(this.defaultAccount, this.tokens);
     this.base = config.sandbox ? SANDBOX_BASE : PROD_BASE;
     this.v4Base = config.sandbox ? SANDBOX_V4_BASE : PROD_V4_BASE;
     this.timeoutMs = config.timeoutMs ?? 60_000;
@@ -122,9 +133,41 @@ export class YandexDirectClient {
       "Accept-Language": this.config.lang,
       "Content-Type": "application/json; charset=utf-8",
     };
-    const effectiveLogin = login === undefined ? this.config.login : login;
-    if (effectiveLogin) headers["Client-Login"] = effectiveLogin;
+    if (login) headers["Client-Login"] = login;
     return { ...headers, ...extra };
+  }
+
+  /** Aliases of every configured account, in configuration order. */
+  get accounts(): string[] {
+    return [...this.providers.keys()];
+  }
+
+  /** The alias used by calls that name no account. */
+  get defaultAccountAlias(): string {
+    return this.defaultAccount;
+  }
+
+  /**
+   * Resolves a call target to the credentials and Client-Login it must use.
+   *
+   * Each account is a separate OAuth application, so the token provider is chosen
+   * per call — sending account A's request with account B's token would silently
+   * read (or write!) the wrong advertiser. An unknown alias is a hard error rather
+   * than a fall-back to the default, for exactly that reason.
+   */
+  private resolveTarget(target?: CallTarget): { provider: TokenProvider; login: string | null } {
+    const alias = (target?.account ?? this.defaultAccount).toLowerCase();
+    const provider = this.providers.get(alias);
+    if (!provider) {
+      throw new Error(
+        `Неизвестный аккаунт "${alias}". Настроенные аккаунты: ${this.accounts.join(", ") || "нет"}. ` +
+          "Список с описаниями — инструмент list_accounts.",
+      );
+    }
+    // undefined → the account's configured login; null → explicitly no header.
+    const login =
+      target?.login === undefined ? this.accountLogins.get(alias) ?? this.config.login ?? null : target.login;
+    return { provider, login };
   }
 
   /**
@@ -146,8 +189,9 @@ export class YandexDirectClient {
     service: string,
     method: string,
     params: Record<string, unknown>,
-    login?: string | null,
+    route?: CallTarget,
   ): Promise<T> {
+    const { provider, login } = this.resolveTarget(route);
     // SSRF guard (matches the sibling MCP servers): resolve `service` against the API
     // base and reject anything that lands on a FOREIGN origin — an absolute URL
     // ("https://evil/x", "http://evil/x") or a protocol-relative/backslash form
@@ -168,7 +212,7 @@ export class YandexDirectClient {
     // At most ONE token re-mint per logical request, outside the transient budget.
     let reauthUsed = false;
     for (let attempt = 0; ; ) {
-      const token = await this.tokens.getToken();
+      const token = await provider.getToken();
       let res: Response;
       let text: string;
       try {
@@ -198,7 +242,7 @@ export class YandexDirectClient {
       // at the auth gate — so a retry with a fresh token is safe for ANY method,
       // writes included. Static tokens return false from invalidate() → no retry,
       // preserving the original behaviour.
-      if (YandexDirectClient.isAuthFailure(res.status) && !reauthUsed && this.tokens.invalidate(token)) {
+      if (YandexDirectClient.isAuthFailure(res.status) && !reauthUsed && provider.invalidate(token)) {
         reauthUsed = true;
         continue; // deliberately does NOT consume the transient `attempt` budget
       }
@@ -243,7 +287,7 @@ export class YandexDirectClient {
         if (
           YandexDirectClient.isAuthFailure(res.status, data.error.error_code) &&
           !reauthUsed &&
-          this.tokens.invalidate(token)
+          provider.invalidate(token)
         ) {
           reauthUsed = true;
           continue;
@@ -274,7 +318,14 @@ export class YandexDirectClient {
    * (AccountManagement) that v5 does not expose. Money in v4 is already in currency units
    * (not micros) — callers must NOT run normalizeMoney on it.
    */
-  async callV4<T = unknown>(method: string, param: Record<string, unknown>): Promise<T> {
+  async callV4<T = unknown>(
+    method: string,
+    param: Record<string, unknown>,
+    target?: CallTarget,
+  ): Promise<T> {
+    // v4 takes the token in the body and selects accounts via param.Logins, so only
+    // the credentials part of the target applies here — never a Client-Login header.
+    const { provider } = this.resolveTarget(target);
     // v4 multiplexes read and write behind one method (AccountManagement) via `Action`,
     // so idempotency keys off Action=Get. Only reads are retried on a transient network
     // error or 5xx; a write action (Deposit/Update/…) must never be blindly re-sent.
@@ -282,7 +333,7 @@ export class YandexDirectClient {
     // Same one-shot re-auth as call(): v4 carries the token in the BODY, not a header.
     let reauthUsed = false;
     for (let attempt = 0; ; ) {
-      const token = await this.tokens.getToken();
+      const token = await provider.getToken();
       let res: Response;
       let text: string;
       try {
@@ -327,7 +378,7 @@ export class YandexDirectClient {
       if (data.error_code !== undefined) {
         // v4 code 53 = authorization error, same auth-gate semantics as v5 —
         // the request was rejected before execution, one fresh-token retry is safe.
-        if (data.error_code === 53 && !reauthUsed && this.tokens.invalidate(token)) {
+        if (data.error_code === 53 && !reauthUsed && provider.invalidate(token)) {
           reauthUsed = true;
           continue;
         }
@@ -360,7 +411,7 @@ export class YandexDirectClient {
     params: Record<string, unknown>,
     maxPages = 100,
     caps: AutoPaginateCaps = {},
-    login?: string | null,
+    target?: CallTarget,
   ): Promise<T> {
     const basePage = (params.Page as Record<string, unknown> | undefined) ?? {};
     // autoPaginate ("fetch all") ALWAYS pages at the API max, independent of the
@@ -378,7 +429,7 @@ export class YandexDirectClient {
 
     for (let page = 0; page < maxPages; page++) {
       const pageParams = { ...params, Page: { Limit: limit, Offset: offset } };
-      const result = await this.call<Record<string, unknown>>(service, "get", pageParams, login);
+      const result = await this.call<Record<string, unknown>>(service, "get", pageParams, target);
 
       if (!merged) {
         merged = result;
@@ -442,16 +493,17 @@ export class YandexDirectClient {
     // One-shot re-auth, same semantics as call(): a 401 means the poll request
     // never reached the report queue, so retrying it cannot double-submit.
     let reauthUsed = false;
+    const { provider, login } = this.resolveTarget(opts);
 
     for (let attempt = 0; attempt < maxPolls; attempt++) {
-      const token = await this.tokens.getToken();
+      const token = await provider.getToken();
       // Headers are rebuilt EVERY poll: a long offline report is exactly the
       // window in which a cached token can expire mid-generation.
       const { res, text } = await this.fetchWithTimeout(
         url,
         {
           method: "POST",
-          headers: this.buildHeaders(token, extraHeaders, opts.login),
+          headers: this.buildHeaders(token, extraHeaders, login),
           body: JSON.stringify({ params }),
         },
         "reports",
@@ -460,7 +512,7 @@ export class YandexDirectClient {
 
       if (res.status === 200) return text;
 
-      if (res.status === 401 && !reauthUsed && this.tokens.invalidate(token)) {
+      if (res.status === 401 && !reauthUsed && provider.invalidate(token)) {
         reauthUsed = true;
         attempt--; // the rejected poll never counted against the report queue
         continue;

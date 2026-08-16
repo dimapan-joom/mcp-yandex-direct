@@ -12,10 +12,17 @@ interface Account {
 }
 
 async function main(): Promise<void> {
-  const { config, auth } = loadConfig();
-  const client = new YandexDirectClient(config, createTokenProvider(auth));
+  const { config, accounts, defaultAccount } = loadConfig();
+  // One provider per configured account — each account has its own credentials.
+  // The calls below name no account, so they run against `defaultAccount`.
+  const providers = accounts.map((a) => ({
+    alias: a.alias,
+    provider: createTokenProvider(a.auth),
+    login: a.login,
+  }));
+  const client = new YandexDirectClient(config, undefined, providers, defaultAccount);
   const target = config.sandbox ? "sandbox" : "PRODUCTION";
-  console.log(`Yandex Direct smoke check (${target}, read-only)\n`);
+  console.log(`Yandex Direct smoke check (${target}, read-only, аккаунт «${defaultAccount}»)\n`);
 
   // clients/get also carries the Units quota header.
   const account = await client.call<{ Clients?: Account[] }>("clients", "get", {

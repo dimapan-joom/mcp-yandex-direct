@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { YandexDirectClient } from "../client.js";
-import { compact, fail, loginParam, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
+import { accountParam, compact, fail, loginParam, ok, okOrPartial, READ_ONLY, WRITE_CREATE, WRITE_DELETE, WRITE_UPDATE } from "./util.js";
 
 const BID_MODIFIER_TYPES = [
   "MOBILE_ADJUSTMENT",
@@ -38,10 +38,11 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
           .array(z.enum(LEVELS))
           .optional()
           .describe("Уровни, на которых читать. По умолчанию оба: CAMPAIGN и AD_GROUP."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ campaignIds, adGroupIds, ids, types, levels, login }) => {
+    async ({ campaignIds, adGroupIds, ids, types, levels, account, login }) => {
       try {
         if (!campaignIds?.length && !adGroupIds?.length && !ids?.length) {
           return fail("Нужно указать хотя бы одно из: campaignIds, adGroupIds или ids.");
@@ -65,7 +66,7 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
           // this the video adjustment is silently never returned.
           VideoAdjustmentFieldNames: ["BidModifier"],
         };
-        const result = await client.call("bidmodifiers", "get", params, login);
+        const result = await client.call("bidmodifiers", "get", params, { account, login });
         return ok(result);
       } catch (e) {
         return fail(e);
@@ -117,10 +118,11 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
           .array(z.object({ regionId: z.number().int(), percent: z.number().int().min(0) }))
           .optional()
           .describe("Корректировки по регионам."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ campaignId, adGroupId, mobile, desktop, demographics, retargeting, regional, login }) => {
+    async ({ campaignId, adGroupId, mobile, desktop, demographics, retargeting, regional, account, login }) => {
       try {
         if ((campaignId === undefined) === (adGroupId === undefined)) {
           return fail("Нужно указать ровно одно: campaignId или adGroupId.");
@@ -149,7 +151,7 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
         if (!hasAdjustment) {
           return fail("Нужно указать хотя бы одну корректировку: mobile, desktop, demographics, retargeting или regional.");
         }
-        const result = await client.call("bidmodifiers", "add", { BidModifiers: [item] }, login);
+        const result = await client.call("bidmodifiers", "add", { BidModifiers: [item] }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -177,13 +179,14 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
           )
           .min(1)
           .describe("В каждом элементе нужны id и percent."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ bids, login }) => {
+    async ({ bids, account, login }) => {
       try {
         const BidModifiers = bids.map((b) => ({ Id: b.id, BidModifier: b.percent }));
-        const result = await client.call("bidmodifiers", "set", { BidModifiers }, login);
+        const result = await client.call("bidmodifiers", "set", { BidModifiers }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
@@ -199,12 +202,13 @@ export function registerBidModifierTools(server: McpServer, client: YandexDirect
       description: "Удаляет корректировки ставок по id (bidmodifiers/delete).",
       inputSchema: {
         ids: z.array(z.number().int()).min(1).describe("Id корректировок, которые нужно удалить."),
+        account: accountParam(),
         login: loginParam(),
       },
     },
-    async ({ ids, login }) => {
+    async ({ ids, account, login }) => {
       try {
-        const result = await client.call("bidmodifiers", "delete", { SelectionCriteria: { Ids: ids } }, login);
+        const result = await client.call("bidmodifiers", "delete", { SelectionCriteria: { Ids: ids } }, { account, login });
         return okOrPartial(result);
       } catch (e) {
         return fail(e);
