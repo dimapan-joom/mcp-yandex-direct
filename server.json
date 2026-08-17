@@ -1,33 +1,56 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.askads/mcp-yandex-direct",
-  "title": "Yandex Direct MCP",
-  "description": "MCP server for Yandex Direct API v5: manage PPC campaigns, ads, keywords, and statistics.",
-  "websiteUrl": "https://github.com/askads/mcp-yandex-direct#readme",
+  "name": "io.github.dimapan-joom/mcp-yandex-direct",
+  "title": "Yandex Direct MCP (multi-account fork)",
+  "description": "MCP server for Yandex Direct API v5: multi-account PPC management, full Reports access with revenue/ROAS, and built-in audit tools.",
+  "websiteUrl": "https://github.com/dimapan-joom/mcp-yandex-direct#readme",
   "repository": {
-    "url": "https://github.com/askads/mcp-yandex-direct",
+    "url": "https://github.com/dimapan-joom/mcp-yandex-direct",
     "source": "github"
   },
   "version": "1.4.2",
   "packages": [
     {
-      "registryType": "npm",
-      "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "mcp-yandex-direct",
+      "registryType": "github",
+      "registryBaseUrl": "https://github.com",
+      "identifier": "dimapan-joom/mcp-yandex-direct",
       "version": "1.4.2",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
+          "name": "YANDEX_ACCOUNT_<ALIAS>_CLIENT_ID",
+          "description": "OAuth application ClientID for the account named <ALIAS>.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "YANDEX_ACCOUNT_<ALIAS>_CLIENT_SECRET",
+          "description": "OAuth application secret for <ALIAS>.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "YANDEX_ACCOUNT_<ALIAS>_REFRESH_TOKEN",
+          "description": "OAuth refresh token for <ALIAS>; the server renews the access token itself.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "YANDEX_DEFAULT_ACCOUNT",
+          "description": "Alias used by calls that name no account. Required when several accounts are configured.",
+          "isRequired": false
+        },
+        {
           "name": "YANDEX_DIRECT_TOKEN",
-          "description": "Yandex Direct OAuth token — full account access (can spend budget). Treat it as a secret.",
-          "isRequired": true,
+          "description": "Single-account static OAuth token — full account access (can spend budget). Treat it as a secret.",
+          "isRequired": false,
           "isSecret": true
         },
         {
           "name": "YANDEX_DIRECT_LOGIN",
-          "description": "Client login to target a specific account on agency tokens.",
+          "description": "Client login to target a specific client of an agency account.",
           "isRequired": false
         },
         {

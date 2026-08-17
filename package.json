@@ -1,7 +1,7 @@
 {
   "name": "mcp-yandex-direct",
   "version": "1.4.2",
-  "description": "MCP server for the Yandex Direct API v5 — manage PPC campaigns, ad groups, ads, keywords and pull statistics from AI agents.",
+  "description": "MCP server for the Yandex Direct API v5 — multi-account PPC management (campaigns, ad groups, ads, keywords), full Reports access with revenue/ROAS, and built-in audit tools for AI agents.",
   "mcpName": "io.github.askads/mcp-yandex-direct",
   "type": "module",
   "bin": {
@@ -30,17 +30,21 @@
     "yandex",
     "yandex-direct",
     "advertising",
-    "ppc"
+    "ppc",
+    "multi-account",
+    "roas",
+    "claude",
+    "cursor"
   ],
   "license": "MIT",
   "author": "Aleksandr Kovalko",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/askads/mcp-yandex-direct.git"
+    "url": "git+https://github.com/dimapan-joom/mcp-yandex-direct.git"
   },
-  "homepage": "https://github.com/askads/mcp-yandex-direct#readme",
+  "homepage": "https://github.com/dimapan-joom/mcp-yandex-direct#readme",
   "bugs": {
-    "url": "https://github.com/askads/mcp-yandex-direct/issues"
+    "url": "https://github.com/dimapan-joom/mcp-yandex-direct/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

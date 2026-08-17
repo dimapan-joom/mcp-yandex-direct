@@ -1,14 +1,27 @@
 # Яндекс Директ MCP
 
-[![npm](https://img.shields.io/npm/v/mcp-yandex-direct)](https://www.npmjs.com/package/mcp-yandex-direct)
-[![CI](https://github.com/askads/mcp-yandex-direct/actions/workflows/ci.yml/badge.svg)](https://github.com/askads/mcp-yandex-direct/actions/workflows/ci.yml)
-[![Glama](https://glama.ai/mcp/servers/askads/mcp-yandex-direct/badges/score.svg)](https://glama.ai/mcp/servers/askads/mcp-yandex-direct)
+[![CI](https://github.com/dimapan-joom/mcp-yandex-direct/actions/workflows/ci.yml/badge.svg)](https://github.com/dimapan-joom/mcp-yandex-direct/actions/workflows/ci.yml)
+[![Тесты](https://img.shields.io/badge/tests-229%20passing-brightgreen)](#разработка)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
+> **Это форк.** Оригинальный проект — [askads/mcp-yandex-direct](https://github.com/askads/mcp-yandex-direct)
+> (MIT, автор gistrec). Что добавлено здесь:
+>
+> - **Несколько аккаунтов с разными ключами** в одном процессе — параметр `account` в каждом инструменте
+>   и `list_accounts` со списком алиасов ([подробнее](docs/MULTI_ACCOUNT.md)).
+> - **Авторизация по refresh-токену** — сервер сам обновляет access-токен и не падает, когда тот истекает.
+> - **Полный доступ к Reports** — выручка и ROAS (`Revenue`/`Cost`), цели Метрики, модели атрибуции,
+>   тип `CUSTOM_REPORT` с произвольными разрезами, произвольные фильтры.
+> - **Аудиты-расследования** — `audit_account_health`, `audit_search_terms`, `audit_budget_pacing`,
+>   `audit_campaign_efficiency`: каждый делает несколько запросов и возвращает готовый разбор с находками.
+> - **Телеметрия удалена** — сервер не обращается ни к чему, кроме API Яндекса.
+
+
 
 MCP-сервер для работы с рекламным кабинетом **Яндекс Директа** из Claude, Cursor, Codex и других AI-приложений на естественном языке. Он помогает разобраться, куда уходит рекламный бюджет, сопоставить кампании, объявления и ключевые фразы, а затем подготовить или внести нужные изменения без переходов между разделами кабинета.
 
-- **40 инструментов.** Кампании, группы, объявления, ключевые фразы, ставки, корректировки, расширения, статистика, баланс и справочники.
-- **Два способа подключения.** Удалённый сервер по URL не требует вручную получать токен и только читает данные; локальный через `npx` даёт полный доступ к кабинету.
+- **56 инструментов.** Кампании, группы, объявления, ключевые фразы, ставки, корректировки, расширения, статистика, баланс и справочники.
+- **Несколько аккаунтов сразу.** У каждого аккаунта свои ключи; нужный выбирается параметром `account` в вызове, а не отдельным процессом сервера.
 - **Деньги в понятном виде.** В удобных инструментах бюджеты, ставки и баланс показываются в валюте аккаунта, а не в микроединицах API.
 - **Реальная реклама.** Локальные изменения применяются в боевом кабинете и могут повлиять на расход. Для работы в тестовой среде есть песочница Яндекс Директа.
 
@@ -27,12 +40,13 @@ MCP-сервер для работы с рекламным кабинетом **
 ## Содержание
 
 - [Быстрый старт](#быстрый-старт)
+- [Установка из исходников](#установка-из-исходников)
 - [Что можно поручить](#что-можно-поручить)
 - [Как устроена реклама в Директе](#как-устроена-реклама-в-директе)
 - [Что может изменить сервер](#что-может-изменить-сервер)
 - [Доступ к рекламному кабинету](#доступ-к-рекламному-кабинету)
 - [Данные, лимиты и работа в фоне](#данные-лимиты-и-работа-в-фоне)
-- [Конфиденциальность и телеметрия](#конфиденциальность-и-телеметрия)
+- [Конфиденциальность](#конфиденциальность)
 - [Техническая документация](#техническая-документация)
 - [Поддержка](#поддержка)
 
@@ -43,7 +57,7 @@ MCP-сервер для работы с рекламным кабинетом **
 
 ### Анализ без самостоятельного получения токена — по URL
 
-Удалённый сервер `https://mcp.askads.ru/mcp` подключается через приложение, которое поддерживает MCP по URL. Войдите в Яндекс в браузере и подтвердите доступ: токен не нужно передавать в конфиг. Этот вариант предназначен только для чтения — статистики, аудита и просмотра объектов; он не меняет настройки рекламы.
+Удалённый сервер `https://mcp.askads.ru/mcp` **принадлежит авторам оригинального проекта**, а не этому форку: возможностей форка (несколько аккаунтов, выручка и ROAS, аудиты) там нет. Он подключается через приложение, которое поддерживает MCP по URL. Войдите в Яндекс в браузере и подтвердите доступ: токен не нужно передавать в конфиг. Этот вариант предназначен только для чтения — статистики, аудита и просмотра объектов; он не меняет настройки рекламы.
 
 В Claude Code можно добавить его командой:
 
@@ -55,7 +69,7 @@ claude mcp add --transport http yandex-direct https://mcp.askads.ru/mcp
 
 ### Полный доступ — локально через `npx`
 
-Для создания и изменения объектов нужны Node.js 20+ и [OAuth-токен Яндекс Директа](#доступ-к-рекламному-кабинету). `npx` скачает сервер при первом запуске — отдельно устанавливать пакет не нужно.
+Для создания и изменения объектов нужны Node.js 20+ и [OAuth-токен Яндекс Директа](#доступ-к-рекламному-кабинету). `npx` скачает и соберёт сервер из GitHub при первом запуске — отдельно устанавливать пакет не нужно, но нужен установленный `git`. Первый старт занимает примерно минуту (идёт сборка); дальше запуск мгновенный. Если холодный старт критичен, см. [установку из исходников](#установка-из-исходников).
 
 <details open>
 <summary><strong>Codex</strong></summary>
@@ -66,14 +80,14 @@ claude mcp add --transport http yandex-direct https://mcp.askads.ru/mcp
 
 1. Откройте **Settings → Plugins → MCP servers**.
 2. Нажмите **Add server**.
-3. Добавьте команду запуска `npx -y mcp-yandex-direct@latest` и переменную окружения `YANDEX_DIRECT_TOKEN` со своим токеном.
+3. Добавьте команду запуска `npx -y github:dimapan-joom/mcp-yandex-direct` и переменную окружения `YANDEX_DIRECT_TOKEN` со своим токеном.
 
 **Через командную строку:**
 
 ```bash
 codex mcp add yandex-direct \
   --env YANDEX_DIRECT_TOKEN=ваш_токен \
-  -- npx -y mcp-yandex-direct@latest
+  -- npx -y github:dimapan-joom/mcp-yandex-direct
 ```
 
 Проверьте подключение:
@@ -92,7 +106,7 @@ codex mcp list
 ```bash
 claude mcp add --transport stdio --scope user \
   --env YANDEX_DIRECT_TOKEN=ваш_токен \
-  yandex-direct -- npx -y mcp-yandex-direct@latest
+  yandex-direct -- npx -y github:dimapan-joom/mcp-yandex-direct
 ```
 
 Проверить подключение: `claude mcp list`.
@@ -109,7 +123,7 @@ claude mcp add --transport stdio --scope user \
   "mcpServers": {
     "yandex-direct": {
       "command": "npx",
-      "args": ["-y", "mcp-yandex-direct@latest"],
+      "args": ["-y", "github:dimapan-joom/mcp-yandex-direct"],
       "env": {
         "YANDEX_DIRECT_TOKEN": "ваш_токен"
       }
@@ -132,7 +146,7 @@ claude mcp add --transport stdio --scope user \
   "mcpServers": {
     "yandex-direct": {
       "command": "npx",
-      "args": ["-y", "mcp-yandex-direct@latest"],
+      "args": ["-y", "github:dimapan-joom/mcp-yandex-direct"],
       "env": {
         "YANDEX_DIRECT_TOKEN": "ваш_токен"
       }
@@ -154,7 +168,7 @@ claude mcp add --transport stdio --scope user \
     "yandex-direct": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "mcp-yandex-direct@latest"],
+      "args": ["-y", "github:dimapan-joom/mcp-yandex-direct"],
       "env": {
         "YANDEX_DIRECT_TOKEN": "${input:yandex-direct-token}"
       }
@@ -174,6 +188,40 @@ claude mcp add --transport stdio --scope user \
 После сохранения выполните **MCP: List Servers** и запустите сервер из списка.
 
 </details>
+
+### Установка из исходников
+
+Вариант для постоянного использования: сервер собирается один раз, старт мгновенный.
+
+```bash
+git clone https://github.com/dimapan-joom/mcp-yandex-direct.git
+cd mcp-yandex-direct
+npm ci
+npm run build
+```
+
+Затем в конфиге AI-приложения укажите путь к собранному файлу:
+
+```json
+{
+  "mcpServers": {
+    "yandex-direct": {
+      "command": "node",
+      "args": ["/абсолютный/путь/mcp-yandex-direct/dist/index.js"],
+      "env": {
+        "YANDEX_OAUTH_CLIENT_ID": "id приложения",
+        "YANDEX_OAUTH_CLIENT_SECRET": "пароль приложения",
+        "YANDEX_OAUTH_REFRESH_TOKEN": "refresh-токен"
+      }
+    }
+  }
+}
+```
+
+Такая авторизация не истекает: сервер сам обменивает refresh-токен на access-токен. Для нескольких
+аккаунтов с разными ключами см. [docs/MULTI_ACCOUNT.md](docs/MULTI_ACCOUNT.md).
+
+Проверить связь с API, не поднимая MCP: `npm run smoke` (только чтение).
 
 ## Что можно поручить
 
