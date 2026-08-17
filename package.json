@@ -1,6 +1,6 @@
 {
   "name": "mcp-yandex-direct",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "description": "MCP server for the Yandex Direct API v5 — multi-account PPC management (campaigns, ad groups, ads, keywords), full Reports access with revenue/ROAS, and built-in audit tools for AI agents.",
   "mcpName": "io.github.askads/mcp-yandex-direct",
   "type": "module",
