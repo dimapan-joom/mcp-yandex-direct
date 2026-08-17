@@ -249,8 +249,8 @@ claude mcp add --transport stdio --scope user \
 
 ## Техническая документация
 
-- [Подключение форка Joom](docs/JOOM_SETUP.md) — сборка, секреты из Vault, конфиг MCP, агентская схема и ограничения API.
-- [Все инструменты](https://github.com/askads/mcp-yandex-direct/blob/main/docs/TOOLS.md) — параметры, ответы и границы каждого инструмента.
+- [Все инструменты](docs/TOOLS.md) — параметры, ответы и границы каждого инструмента.
+- [Несколько аккаунтов](docs/MULTI_ACCOUNT.md) — настройка нескольких рекламных аккаунтов с разными ключами.
 - [Разработка](https://github.com/askads/mcp-yandex-direct/blob/main/docs/DEVELOPMENT.md) — устройство проекта и работа с исходным кодом.
 - [API Яндекс Директа](https://yandex.ru/dev/direct/doc/dg/concepts/about.html) — первоисточник по API и его ограничениям.
 - [Пакет npm](https://www.npmjs.com/package/mcp-yandex-direct) — опубликованные версии сервера.
