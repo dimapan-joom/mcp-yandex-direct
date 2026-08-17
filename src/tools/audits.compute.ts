@@ -177,6 +177,39 @@ export const CAMPAIGN_AUDIT_FIELDS = [
 
 export const REJECTED_AD_FIELDS = ["Id", "CampaignId", "AdGroupId", "State", "Status", "StatusClarification"];
 
+/**
+ * `ads/get` REQUIRES at least one object filter — CampaignIds, AdGroupIds or Ids;
+ * `Statuses` alone is rejected with error 4001. And CampaignIds itself is capped:
+ * 11 ids fail with «Превышено допустимое количество идентификаторов», 10 succeed
+ * (verified against the live API). Hence the probe walks campaigns in chunks of 10.
+ */
+export const ADS_CAMPAIGN_CHUNK = 10;
+
+/**
+ * Ceiling on chunks per audit. Each chunk is a separate billed request, so an
+ * account with hundreds of campaigns would otherwise burn Units and minutes on
+ * one "health check". Hitting the cap makes the coverage numbers unequal, which
+ * the report then states outright instead of implying full coverage.
+ */
+export const ADS_MAX_CHUNKS = 30;
+
+/** Splits a list into fixed-size chunks; never mutates the input. */
+export function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Campaigns worth probing for rejected ads. ARCHIVED campaigns are excluded: their
+ * ads cannot run or be fixed, so they would only spend Units. Everything else stays
+ * in — a rejection inside a paused campaign still has to be fixed before it resumes,
+ * so narrowing this to State=ON would hide real problems.
+ */
+export function campaignsToProbe(campaigns: readonly AuditCampaign[]): number[] {
+  return campaigns.filter((c) => c.State !== "ARCHIVED" && typeof c.Id === "number").map((c) => c.Id);
+}
+
 export interface AuditCampaign {
   Id: number;
   Name?: string;
@@ -290,23 +323,51 @@ function campaignSection(campaigns: readonly AuditCampaign[], maxExamples: numbe
   return { section, findings, dailyBudgetActive };
 }
 
-function rejectedAdsSection(ads: AuditAd[] | undefined, error: string | undefined, maxExamples: number) {
-  if (error !== undefined) {
+/** How much of the account the rejected-ads probe actually managed to cover. */
+export interface RejectedAdsProbe {
+  ads?: AuditAd[];
+  /** Campaigns whose ads were successfully read. */
+  campaignsChecked: number;
+  /** Campaigns that should have been read (non-archived). */
+  campaignsTotal: number;
+  /** Errors from individual chunks, deduplicated. */
+  errors: string[];
+  /** True when ADS_MAX_CHUNKS stopped the walk before all campaigns were read. */
+  cappedByChunkLimit: boolean;
+}
+
+function rejectedAdsSection(probe: RejectedAdsProbe | undefined, maxExamples: number) {
+  const findings: RankedFinding[] = [];
+  if (!probe) return { section: undefined, findings };
+
+  const { campaignsChecked, campaignsTotal, errors, cappedByChunkLimit } = probe;
+
+  // Nothing to probe is a definite answer, not a gap: with zero non-archived
+  // campaigns there is nowhere for a live rejected ad to exist.
+  if (campaignsTotal === 0) {
     return {
-      section: undefined,
-      findings: [
-        {
-          rank: SEVERITY.MEDIUM,
-          text: `Секция отклонённых объявлений НЕ построена: ads/get вернул ошибку «${error}». Это не значит, что отклонений нет — их просто не удалось проверить.`,
-        },
-      ] as RankedFinding[],
+      section: { total: 0, campaignsChecked: 0, campaignsTotal: 0, complete: true, withReason: 0, examples: [] },
+      findings,
     };
   }
-  if (!ads) return { section: undefined, findings: [] as RankedFinding[] };
 
+  // Total failure: say so instead of returning a zero that reads like "all clear".
+  if (probe.ads === undefined || campaignsChecked === 0) {
+    findings.push({
+      rank: SEVERITY.MEDIUM,
+      text:
+        `Отклонённые объявления проверить НЕ удалось (0 из ${campaignsTotal} кампаний): ` +
+        `${errors[0] ?? "ads/get не вернул данных"}. Это не значит, что отклонений нет — ` +
+        "проверка не выполнена, вывод об отсутствии отклонений делать нельзя.",
+    });
+    return { section: undefined, findings };
+  }
+
+  const ads = probe.ads;
   const live = ads.filter((ad) => ad.State !== "ARCHIVED");
   const withReason = live.filter((ad) => (ad.StatusClarification ?? "").trim().length > 0);
-  const findings: RankedFinding[] = [];
+  const complete = campaignsChecked === campaignsTotal && errors.length === 0;
+
   if (live.length > 0) {
     findings.push({
       rank: SEVERITY.HIGH,
@@ -319,8 +380,27 @@ function rejectedAdsSection(ads: AuditAd[] | undefined, error: string | undefine
       });
     }
   }
+
+  // Partial coverage must be loud: "0 rejected out of half the account" is not
+  // the same claim as "no rejected ads", and only this finding keeps them apart.
+  if (!complete) {
+    const reason = cappedByChunkLimit
+      ? `проверка остановлена на лимите ${ADS_MAX_CHUNKS} пакетов запросов`
+      : `часть запросов не прошла: ${errors.slice(0, 2).join("; ")}`;
+    findings.push({
+      rank: SEVERITY.MEDIUM,
+      text:
+        `Проверено ${campaignsChecked} из ${campaignsTotal} кампаний — ${reason}. ` +
+        `Найденные отклонения (${live.length}) достоверны, но по непроверенным кампаниям вывода нет: ` +
+        "«отклонений больше нет» утверждать нельзя. Сузить аудит через campaignIds, чтобы дочитать остальные.",
+    });
+  }
+
   const section = {
     total: live.length,
+    campaignsChecked,
+    campaignsTotal,
+    complete,
     archivedSkipped: ads.length - live.length,
     withReason: withReason.length,
     examples: live.slice(0, maxExamples).map((ad) =>
@@ -405,8 +485,8 @@ function balanceSection(
 
 export interface HealthInputs {
   campaigns: AuditCampaign[];
-  rejectedAds?: AuditAd[];
-  rejectedAdsError?: string;
+  /** Result of the chunked rejected-ads walk, including how much it covered. */
+  rejectedAdsProbe?: RejectedAdsProbe;
   funds?: AuditAccountFunds[];
   fundsError?: string;
   maxExamples: number;
@@ -415,7 +495,7 @@ export interface HealthInputs {
 /** Pure assembler: takes what the three probes returned and produces the verdict. */
 export function buildHealthReport(input: HealthInputs): Record<string, unknown> {
   const campaigns = campaignSection(input.campaigns, input.maxExamples);
-  const ads = rejectedAdsSection(input.rejectedAds, input.rejectedAdsError, input.maxExamples);
+  const ads = rejectedAdsSection(input.rejectedAdsProbe, input.maxExamples);
   const balance = balanceSection(input.funds, input.fundsError, campaigns.dailyBudgetActive);
   const findings = renderFindings([...campaigns.findings, ...ads.findings, ...balance.findings]);
   return compact({

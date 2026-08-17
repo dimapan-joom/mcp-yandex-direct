@@ -5,8 +5,12 @@ import { MAX_TOP_N, parseRows } from "./statistics.aggregate.js";
 import { DATE_RANGES } from "./statistics.js";
 import { accountParam, compact, fail, isoDate, loginParam, normalizeMoney, ok, READ_ONLY } from "./util.js";
 import {
+  ADS_CAMPAIGN_CHUNK,
+  ADS_MAX_CHUNKS,
   buildHealthReport,
   CAMPAIGN_AUDIT_FIELDS,
+  campaignsToProbe,
+  chunk,
   computeEfficiencyAudit,
   computePacingAudit,
   computeSearchTermAudit,
@@ -59,7 +63,7 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
       title: "Аудит: здоровье аккаунта",
       annotations: READ_ONLY,
       description:
-        "РАССЛЕДОВАНИЕ «что горит в аккаунте» одним вызовом: делает три запроса (campaigns/get, ads/get по отклонённым, баланс через Live v4 AccountManagement) и возвращает готовый разбор, а не сырые списки. Проверяет: запрет оплаты у кампаний (StatusPayment=DISALLOWED), отклонённые модерацией кампании и объявления вместе с причинами (StatusClarification, если API их отдал), активные кампании без дневного бюджета, остаток денег и на сколько дней его хватит при текущей сумме дневных бюджетов. Ключевое поле ответа — findings: список находок строками, отсортированный от самой опасной к информационной, его можно пересказывать как есть. ВАЖНО: если какая-то из трёх проверок не прошла (нет прав, нет единого счёта), соответствующая секция ОТСУТСТВУЕТ в ответе, а причина попадает в findings — отсутствие секции не значит «всё в порядке». Для конкретного клиента агентства обязательно передавать login.",
+        "РАССЛЕДОВАНИЕ «что горит в аккаунте» одним вызовом: возвращает готовый разбор, а не сырые списки. Проверяет: запрет оплаты у кампаний (StatusPayment=DISALLOWED), отклонённые модерацией кампании и объявления вместе с причинами (StatusClarification, если API их отдал), активные кампании без дневного бюджета, остаток денег и на сколько дней его хватит при текущей сумме дневных бюджетов. Ключевое поле ответа — findings: список находок строками, отсортированный от самой опасной к информационной, его можно пересказывать как есть. Отклонённые объявления читаются пакетами по 10 кампаний (ads/get не принимает фильтр из одних статусов и ограничивает CampaignIds десятью), поэтому вызов делает несколько запросов и тратит Units пропорционально числу кампаний; секция rejectedAds содержит campaignsChecked/campaignsTotal и флаг complete. ВАЖНО: если проверка не прошла или прошла частично, вывод «отклонённых объявлений нет» делать НЕЛЬЗЯ — смотреть complete и findings; при неудаче секция ОТСУТСТВУЕТ в ответе, а причина попадает в findings, и отсутствие секции не значит «всё в порядке». Для конкретного клиента агентства обязательно передавать login.",
       inputSchema: {
         campaignIds: z.array(z.number().int()).optional().describe("Ограничить аудит этими id кампаний."),
         maxExamples: z
@@ -89,28 +93,48 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
         );
         const campaigns = normalizeMoney(campaignsResult).Campaigns ?? [];
 
-        // The other two probes degrade softly: a missing shared account or a field the
-        // account has no rights to must not sink the whole audit.
-        let rejectedAds: AuditAd[] | undefined;
-        let rejectedAdsError: string | undefined;
-        try {
-          const adsResult = await client.call<{ Ads?: AuditAd[] }>(
-            "ads",
-            "get",
-            {
-              SelectionCriteria: compact({
-                CampaignIds: campaignIds?.length ? campaignIds : undefined,
-                Statuses: ["REJECTED"],
-              }),
-              FieldNames: REJECTED_AD_FIELDS,
-              Page: { Limit: REJECTED_ADS_PAGE_LIMIT, Offset: 0 },
-            },
-            { account, login },
-          );
-          rejectedAds = adsResult.Ads ?? [];
-        } catch (e) {
-          rejectedAdsError = e instanceof Error ? e.message : String(e);
+        // Rejected ads: ads/get REFUSES a request whose SelectionCriteria carries only
+        // Statuses — it needs CampaignIds/AdGroupIds/Ids — and CampaignIds itself caps at
+        // 10. So the probe walks the campaigns we just fetched in chunks of 10, tracking
+        // coverage: a partial walk must never be reported as "no rejected ads".
+        const probeIds = campaignsToProbe(campaigns);
+        const chunks = chunk(probeIds, ADS_CAMPAIGN_CHUNK);
+        const cappedByChunkLimit = chunks.length > ADS_MAX_CHUNKS;
+        const walked = chunks.slice(0, ADS_MAX_CHUNKS);
+
+        const collected: AuditAd[] = [];
+        const errors = new Set<string>();
+        let campaignsChecked = 0;
+        for (const ids of walked) {
+          try {
+            // getAll follows LimitedBy, so a chunk with more rejections than one page
+            // is still read in full.
+            const page = await client.getAll<{ Ads?: AuditAd[] }>(
+              "ads",
+              {
+                SelectionCriteria: { CampaignIds: ids, Statuses: ["REJECTED"] },
+                FieldNames: REJECTED_AD_FIELDS,
+              },
+              undefined,
+              { maxRows: REJECTED_ADS_PAGE_LIMIT },
+              { account, login },
+            );
+            collected.push(...(page.Ads ?? []));
+            campaignsChecked += ids.length;
+          } catch (e) {
+            // One failing chunk (rights, a transient error) must not void the rest:
+            // keep what was read and report the shortfall in coverage.
+            errors.add(e instanceof Error ? e.message : String(e));
+          }
         }
+
+        const rejectedAdsProbe = {
+          ads: campaignsChecked > 0 ? collected : undefined,
+          campaignsChecked,
+          campaignsTotal: probeIds.length,
+          errors: [...errors],
+          cappedByChunkLimit,
+        };
 
         let funds: AuditAccountFunds[] | undefined;
         let fundsError: string | undefined;
@@ -131,7 +155,7 @@ export function registerAuditTools(server: McpServer, client: YandexDirectClient
         }
 
         return ok(
-          buildHealthReport({ campaigns, rejectedAds, rejectedAdsError, funds, fundsError, maxExamples: limit }),
+          buildHealthReport({ campaigns, rejectedAdsProbe, funds, fundsError, maxExamples: limit }),
         );
       } catch (e) {
         return fail(e);

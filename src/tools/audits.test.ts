@@ -21,6 +21,7 @@ interface Stubs {
   report?: (params: any) => string;
   call?: (service: string, method: string, params: any) => unknown;
   callV4?: (method: string, param: any) => unknown;
+  getAll?: (service: string, params: any) => unknown;
 }
 
 /** Registers the audit tools against a fake server + client whose calls are stubbable. */
@@ -40,6 +41,11 @@ function harness(stubs: Stubs = {}) {
       calls.push({ kind: "callV4", method, param });
       if (!stubs.callV4) throw new Error(`callV4 ${method} не застаблен`);
       return stubs.callV4(method, param);
+    },
+    getAll: async (service: string, params: any, _maxPages?: unknown, _caps?: unknown, target?: unknown) => {
+      calls.push({ kind: "getAll", service, params, target });
+      if (!stubs.getAll) throw new Error(`getAll ${service} не застаблен`);
+      return stubs.getAll(service, params);
     },
   };
   const tools: Record<string, Handler> = {};
@@ -306,7 +312,13 @@ test("health: payment block outranks moderation rejections and both reach findin
       { Id: 1, Name: "Blocked", State: "ON", Status: "ACCEPTED", StatusPayment: "DISALLOWED" },
       { Id: 2, Name: "Rejected", State: "ON", Status: "REJECTED", StatusClarification: "нарушение" },
     ],
-    rejectedAds: [{ Id: 10, CampaignId: 2, State: "ON", Status: "REJECTED", StatusClarification: "текст" }],
+    rejectedAdsProbe: {
+      ads: [{ Id: 10, CampaignId: 2, State: "ON", Status: "REJECTED", StatusClarification: "текст" }],
+      campaignsChecked: 2,
+      campaignsTotal: 2,
+      errors: [],
+      cappedByChunkLimit: false,
+    },
     funds: [{ AccountID: 7, Login: "acc", Amount: "1000", Currency: "RUB" }],
     maxExamples: 5,
   }) as any;
@@ -316,19 +328,83 @@ test("health: payment block outranks moderation rejections and both reach findin
   assert.equal(report.campaigns.payment.blocked, 1);
   assert.equal(report.campaigns.moderation.rejectedExamples[0].reason, "нарушение");
   assert.equal(report.rejectedAds.total, 1);
+  assert.equal(report.rejectedAds.complete, true);
+  assert.equal(report.rejectedAds.examples[0].reason, "текст");
 });
 
 test("health: a failed probe omits its section and says so in findings (never reads as 'all clear')", () => {
   const report = buildHealthReport({
     campaigns: [{ Id: 1, Name: "A", State: "ON", DailyBudget: { Amount: 100 } }],
-    rejectedAdsError: "нет прав",
+    rejectedAdsProbe: {
+      ads: undefined,
+      campaignsChecked: 0,
+      campaignsTotal: 1,
+      errors: ["нет прав"],
+      cappedByChunkLimit: false,
+    },
     fundsError: "нет единого счёта",
     maxExamples: 5,
   }) as any;
   assert.equal("rejectedAds" in report, false);
   assert.equal("balance" in report, false);
-  assert.ok(report.findings.some((f: string) => /НЕ построена: ads\/get вернул ошибку «нет прав»/.test(f)));
+  assert.ok(report.findings.some((f: string) => /проверить НЕ удалось \(0 из 1 кампаний\)/.test(f)));
+  assert.ok(report.findings.some((f: string) => /вывод об отсутствии отклонений делать нельзя/.test(f)));
   assert.ok(report.findings.some((f: string) => /НЕ построена: Live v4 AccountManagement/.test(f)));
+});
+
+test("health: PARTIAL coverage is stated outright — zero found is not 'none exist'", () => {
+  const report = buildHealthReport({
+    campaigns: [{ Id: 1, Name: "A", State: "ON", DailyBudget: { Amount: 100 } }],
+    rejectedAdsProbe: {
+      ads: [],
+      campaignsChecked: 10,
+      campaignsTotal: 25,
+      errors: ["временная ошибка"],
+      cappedByChunkLimit: false,
+    },
+    maxExamples: 5,
+  }) as any;
+  assert.equal(report.rejectedAds.total, 0);
+  assert.equal(report.rejectedAds.complete, false);
+  assert.equal(report.rejectedAds.campaignsChecked, 10);
+  assert.equal(report.rejectedAds.campaignsTotal, 25);
+  assert.ok(report.findings.some((f: string) => /Проверено 10 из 25 кампаний/.test(f)));
+  assert.ok(report.findings.some((f: string) => /утверждать нельзя/.test(f)));
+  // The "all clear" fallback must never fire while coverage is incomplete.
+  assert.ok(!report.findings.some((f: string) => /Явных проблем не найдено/.test(f)));
+});
+
+test("health: hitting the chunk cap names the cap as the reason", () => {
+  const report = buildHealthReport({
+    campaigns: [{ Id: 1, Name: "A", State: "ON", DailyBudget: { Amount: 100 } }],
+    rejectedAdsProbe: {
+      ads: [],
+      campaignsChecked: 300,
+      campaignsTotal: 420,
+      errors: [],
+      cappedByChunkLimit: true,
+    },
+    maxExamples: 5,
+  }) as any;
+  assert.ok(report.findings.some((f: string) => /остановлена на лимите \d+ пакетов/.test(f)));
+});
+
+test("health: an account with no non-archived campaigns reports a COMPLETE empty check", () => {
+  // Zero campaigns to probe is a definite answer, not a coverage gap.
+  const report = buildHealthReport({
+    campaigns: [{ Id: 1, Name: "Archived", State: "ARCHIVED" }],
+    rejectedAdsProbe: {
+      ads: [],
+      campaignsChecked: 0,
+      campaignsTotal: 0,
+      errors: [],
+      cappedByChunkLimit: false,
+    },
+    maxExamples: 5,
+  }) as any;
+  assert.equal(report.rejectedAds.complete, true);
+  assert.equal(report.rejectedAds.total, 0);
+  assert.ok(!report.findings.some((f: string) => /утверждать нельзя/.test(f)));
 });
 
 test("health: low balance is measured against the daily budgets of ACTIVE campaigns", () => {
@@ -358,7 +434,13 @@ test("health: a negative balance is CRITICAL and reported as debt", () => {
 test("health: a clean account still returns a findings array, not an empty one", () => {
   const report = buildHealthReport({
     campaigns: [{ Id: 1, Name: "On", State: "ON", Status: "ACCEPTED", DailyBudget: { Amount: 100 } }],
-    rejectedAds: [],
+    rejectedAdsProbe: {
+      ads: [],
+      campaignsChecked: 1,
+      campaignsTotal: 1,
+      errors: [],
+      cappedByChunkLimit: false,
+    },
     funds: [{ AccountID: 7, Login: "acc", Amount: "100000", Currency: "RUB" }],
     maxExamples: 5,
   }) as any;
@@ -416,9 +498,9 @@ test("audit_budget_pacing reads campaigns and a day-split report, then joins the
 
 test("audit_account_health survives failing ads/balance probes and still reports campaigns", async () => {
   const { tools } = harness({
-    call: (service) => {
-      if (service === "ads") throw new Error("нет прав на объявления");
-      return { Campaigns: [{ Id: 1, Name: "A", State: "ON", StatusPayment: "DISALLOWED" }] };
+    call: () => ({ Campaigns: [{ Id: 1, Name: "A", State: "ON", StatusPayment: "DISALLOWED" }] }),
+    getAll: () => {
+      throw new Error("нет прав на объявления");
     },
   });
   const res = await tools.audit_account_health({});
@@ -428,6 +510,75 @@ test("audit_account_health survives failing ads/balance probes and still reports
   assert.equal("rejectedAds" in body, false);
   assert.match(body.findings[0], /Оплата запрещена/);
   assert.ok(body.findings.some((f: string) => /нет прав на объявления/.test(f)));
+});
+
+test("the rejected-ads probe chunks campaigns by 10 and always filters by REJECTED", async () => {
+  // 25 non-archived campaigns → 3 requests (10 + 10 + 5). ads/get rejects a
+  // SelectionCriteria without an object filter, which is what the bug was.
+  const campaigns = Array.from({ length: 25 }, (_, i) => ({ Id: i + 1, Name: `C${i}`, State: "ON" }));
+  const { calls, tools } = harness({
+    call: () => ({ Campaigns: campaigns }),
+    getAll: () => ({ Ads: [] }),
+  });
+  const res = await tools.audit_account_health({});
+  const adsCalls = calls.filter((c) => c.kind === "getAll" && c.service === "ads");
+  assert.equal(adsCalls.length, 3);
+  assert.deepEqual(
+    adsCalls.map((c) => c.params.SelectionCriteria.CampaignIds.length),
+    [10, 10, 5],
+  );
+  for (const c of adsCalls) {
+    assert.deepEqual(c.params.SelectionCriteria.Statuses, ["REJECTED"]);
+    assert.ok(c.params.SelectionCriteria.CampaignIds.length > 0, "фильтр по объектам обязателен");
+  }
+  const body = JSON.parse(res.content[0].text);
+  assert.equal(body.rejectedAds.campaignsChecked, 25);
+  assert.equal(body.rejectedAds.campaignsTotal, 25);
+  assert.equal(body.rejectedAds.complete, true);
+});
+
+test("the probe skips ARCHIVED campaigns and surfaces moderation reasons", async () => {
+  const { calls, tools } = harness({
+    call: () => ({
+      Campaigns: [
+        { Id: 1, Name: "Live", State: "ON" },
+        { Id: 2, Name: "Old", State: "ARCHIVED" },
+        { Id: 3, Name: "Paused", State: "SUSPENDED" },
+      ],
+    }),
+    getAll: () => ({
+      Ads: [{ Id: 99, CampaignId: 3, AdGroupId: 7, State: "ON", Status: "REJECTED", StatusClarification: "нарушение правил" }],
+    }),
+  });
+  const res = await tools.audit_account_health({});
+  const adsCall = calls.find((c) => c.kind === "getAll");
+  // ARCHIVED excluded (its ads cannot run); SUSPENDED kept — a rejection there
+  // still has to be fixed before the campaign resumes.
+  assert.deepEqual(adsCall.params.SelectionCriteria.CampaignIds, [1, 3]);
+  const body = JSON.parse(res.content[0].text);
+  assert.equal(body.rejectedAds.total, 1);
+  assert.equal(body.rejectedAds.withReason, 1);
+  assert.equal(body.rejectedAds.examples[0].reason, "нарушение правил");
+  assert.equal(body.rejectedAds.examples[0].campaignId, 3);
+});
+
+test("one failing chunk keeps the others and reports partial coverage", async () => {
+  const campaigns = Array.from({ length: 20 }, (_, i) => ({ Id: i + 1, Name: `C${i}`, State: "ON" }));
+  let n = 0;
+  const { tools } = harness({
+    call: () => ({ Campaigns: campaigns }),
+    getAll: () => {
+      n++;
+      if (n === 2) throw new Error("временный сбой");
+      return { Ads: [{ Id: 5, CampaignId: 1, State: "ON", Status: "REJECTED" }] };
+    },
+  });
+  const body = JSON.parse((await tools.audit_account_health({})).content[0].text);
+  assert.equal(body.rejectedAds.total, 1, "найденное сохраняется");
+  assert.equal(body.rejectedAds.campaignsChecked, 10);
+  assert.equal(body.rejectedAds.campaignsTotal, 20);
+  assert.equal(body.rejectedAds.complete, false);
+  assert.ok(body.findings.some((f: string) => /Проверено 10 из 20 кампаний/.test(f)));
 });
 
 test("audit_account_health fails loudly when campaigns/get itself fails", async () => {
